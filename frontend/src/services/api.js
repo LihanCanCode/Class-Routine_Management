@@ -176,3 +176,36 @@ export const updateSemesterPageBatchName = async (pageNumber, batchName) => {
 export const deleteSemesterPage = async (pageNumber) => {
     return await API.delete(`/schedule/semester-page/${pageNumber}`);
 };
+
+// Tutorial endpoints
+export const skipTutorial = async () => {
+    return await API.put('/auth/tutorial-skip');
+};
+
+export const completeTutorial = async () => {
+    return await API.put('/auth/tutorial-complete');
+};
+
+export const resetTutorial = async () => {
+    return await API.put('/auth/tutorial-reset');
+};
+
+// Clear all data except DEMO-101
+export const clearAllData = async () => {
+    return await API.delete('/schedule/clear-all');
+};
+
+// Get all unique batches from schedules
+export const getBatches = async () => {
+    return await API.get('/schedule/batches');
+};
+
+// Add a new batch manually
+export const addBatch = async (batchName) => {
+    return await API.post('/schedule/batches', { batchName });
+};
+
+// Delete a batch and all its schedules
+export const deleteBatch = async (batchName) => {
+    return await API.delete(`/schedule/batches/${encodeURIComponent(batchName)}`);
+};

@@ -37,6 +37,28 @@ const userSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    tutorialCompleted: {
+        type: Boolean,
+        default: false
+    },
+    tutorialProgress: {
+        currentStep: {
+            type: Number,
+            default: 0
+        },
+        completedSteps: {
+            type: [Number],
+            default: []
+        },
+        lastAccessed: {
+            type: Date,
+            default: null
+        },
+        skipped: {
+            type: Boolean,
+            default: false
+        }
     }
 }, {
     timestamps: true

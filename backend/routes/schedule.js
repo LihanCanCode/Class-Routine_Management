@@ -873,4 +873,123 @@ router.delete('/semester-page/:pageNumber', auth, adminOnly, async (req, res) =>
     }
 });
 
+// @route   DELETE /api/schedule/clear-all
+// @desc    Clear all schedules except DEMO-101 (Admin only)
+// @access  Private/Admin
+router.delete('/clear-all', auth, adminOnly, async (req, res) => {
+    try {
+        // Delete all schedules except DEMO-101
+        const result = await Schedule.deleteMany({ 
+            roomNumber: { $ne: 'DEMO-101' } 
+        });
+
+        // Delete all rooms except DEMO-101
+        const roomResult = await Room.deleteMany({ 
+            roomNumber: { $ne: 'DEMO-101' } 
+        });
+
+        // Delete all bookings
+        const bookingResult = await Booking.deleteMany({});
+
+        // Delete all semester PDFs
+        const pdfResult = await SchedulePDF.deleteMany({});
+
+        res.json({
+            success: true,
+            message: 'All data cleared successfully',
+            deleted: {
+                schedules: result.deletedCount,
+                rooms: roomResult.deletedCount,
+                bookings: bookingResult.deletedCount,
+                pdfs: pdfResult.deletedCount
+            }
+        });
+    } catch (error) {
+        console.error('Clear all data error:', error);
+        res.status(500).json({ error: 'Failed to clear data' });
+    }
+});
+
+// @route   GET /api/schedule/batches
+// @desc    Get unique batches from all schedules
+// @access  Public
+router.get('/batches', async (req, res) => {
+    try {
+        const batches = await Schedule.distinct('batch');
+        
+        // Filter out empty or invalid batches and sort
+        const validBatches = batches
+            .filter(batch => batch && batch.trim() !== '')
+            .sort();
+
+        res.json(validBatches);
+    } catch (error) {
+        console.error('Get batches error:', error);
+        res.status(500).json({ error: 'Failed to fetch batches' });
+    }
+});
+
+// @route   POST /api/schedule/batches
+// @desc    Add a new batch manually (Admin only)
+// @access  Private/Admin
+router.post('/batches', auth, adminOnly, async (req, res) => {
+    try {
+        const { batchName } = req.body;
+
+        if (!batchName || !batchName.trim()) {
+            return res.status(400).json({ error: 'Batch name is required' });
+        }
+
+        // Check if batch already exists
+        const existingBatches = await Schedule.distinct('batch');
+        if (existingBatches.includes(batchName.trim())) {
+            return res.status(400).json({ error: 'Batch already exists' });
+        }
+
+        // Create a dummy schedule entry to register the batch
+        // This ensures the batch appears in the list
+        const dummySchedule = new Schedule({
+            roomNumber: 'BATCH-PLACEHOLDER',
+            day: 'Monday',
+            timeSlot: { start: '00:00', end: '00:01' },
+            course: 'Placeholder',
+            batch: batchName.trim(),
+            teacher: 'System',
+            isPlaceholder: true // Flag to identify placeholder entries
+        });
+
+        await dummySchedule.save();
+
+        res.json({
+            success: true,
+            message: `Batch '${batchName}' added successfully`,
+            batch: batchName.trim()
+        });
+    } catch (error) {
+        console.error('Add batch error:', error);
+        res.status(500).json({ error: 'Failed to add batch' });
+    }
+});
+
+// @route   DELETE /api/schedule/batches/:batchName
+// @desc    Delete a batch and all its associated schedules (Admin only)
+// @access  Private/Admin
+router.delete('/batches/:batchName', auth, adminOnly, async (req, res) => {
+    try {
+        const { batchName } = req.params;
+
+        // Delete all schedules with this batch
+        const result = await Schedule.deleteMany({ batch: batchName });
+
+        res.json({
+            success: true,
+            message: `Batch '${batchName}' deleted successfully`,
+            deletedSchedules: result.deletedCount
+        });
+    } catch (error) {
+        console.error('Delete batch error:', error);
+        res.status(500).json({ error: 'Failed to delete batch' });
+    }
+});
+
 module.exports = router;

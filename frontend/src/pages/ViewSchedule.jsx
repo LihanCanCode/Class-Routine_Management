@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSchedules, createScheduleEntry, updateScheduleEntry, deleteScheduleEntry, getPDFInfo, getBatchList, getFilteredPDFUrl, getPDFUrl } from '../services/api';
 import { Filter, ChevronDown, ChevronRight, Clock, Users, BookOpen, Plus, X, Edit2, Trash2, Save, FileText, Calendar } from 'lucide-react';
+import { useTutorial } from '../context/TutorialContext';
 
 const ViewSchedule = () => {
     const navigate = useNavigate();
+    const { hideDemoRoom } = useTutorial();
     const [schedules, setSchedules] = useState([]);
     const [loading, setLoading] = useState(true);
     const [rooms, setRooms] = useState([]);
@@ -77,7 +79,12 @@ const ViewSchedule = () => {
 
             // Extract unique rooms
             const allSchedules = response.data.schedules;
-            const uniqueRooms = [...new Set(allSchedules.map(s => s.roomNumber))].sort();
+            let uniqueRooms = [...new Set(allSchedules.map(s => s.roomNumber))].sort();
+            
+            // Hide DEMO-101 after tutorial completion or skip
+            if (hideDemoRoom) {
+                uniqueRooms = uniqueRooms.filter(room => room !== 'DEMO-101');
+            }
 
             setRooms(uniqueRooms);
             setSchedules(allSchedules);

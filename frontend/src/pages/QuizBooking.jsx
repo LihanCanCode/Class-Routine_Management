@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { getQuizConfig, getQuizBookings, createQuizBooking, updateQuizBooking, deleteQuizBooking, getCoursesByBatch } from '../services/api';
 import { Calendar, Clock, Users, BookOpen, Plus, X, Save, Trash2, ChevronLeft, ChevronRight, Filter, ChevronDown, Eye, Edit3 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useTutorial } from '../context/TutorialContext';
 
 const QuizBooking = () => {
     const { user } = useAuth();
+    const { hideDemoRoom } = useTutorial();
     const [config, setConfig] = useState({ rooms: [], timeSlots: [] });
     const [bookings, setBookings] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -57,7 +59,14 @@ const QuizBooking = () => {
     const fetchConfig = async () => {
         try {
             const response = await getQuizConfig();
-            setConfig(response.data);
+            let configData = response.data;
+            
+            // Hide DEMO-101 after tutorial completion or skip
+            if (hideDemoRoom && configData.rooms) {
+                configData.rooms = configData.rooms.filter(room => room !== 'DEMO-101');
+            }
+            
+            setConfig(configData);
         } catch (err) {
             console.error('Failed to fetch config:', err);
             setConfig({

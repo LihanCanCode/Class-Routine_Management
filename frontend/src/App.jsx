@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { TutorialProvider } from './context/TutorialContext';
 import PrivateRoute from './components/PrivateRoute';
 import AdminLogin from './pages/AdminLogin';
 import UploadSchedule from './pages/UploadSchedule';
@@ -9,15 +10,17 @@ import ViewSemesterSchedule from './pages/ViewSemesterSchedule';
 import ViewQuizSchedule from './pages/ViewQuizSchedule';
 import BookRoom from './pages/BookRoom';
 import QuizBooking from './pages/QuizBooking';
+import TutorialManager from './components/Tutorial/TutorialManager';
 import { Calendar, LayoutDashboard, Upload, ClipboardList, LogOut, User } from 'lucide-react';
 
-const NavLink = ({ to, icon: Icon, label }) => {
+const NavLink = ({ to, icon: Icon, label, ...props }) => {
   const location = useLocation();
   const isActive = location.pathname === to;
 
   return (
     <Link
       to={to}
+      {...props}
       className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${isActive
           ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
@@ -57,11 +60,11 @@ const Navigation = () => {
               </>
             ) : (
               <>
-                <NavLink to="/" icon={LayoutDashboard} label="Routine" />
-                <NavLink to="/quiz" icon={ClipboardList} label="Quiz Rooms" />
-                <NavLink to="/view-quiz" icon={ClipboardList} label="Quiz Schedule" />
-                <NavLink to="/book" icon={Calendar} label="Book Room" />
-                {isAdmin && <NavLink to="/upload" icon={Upload} label="Upload" />}
+                <NavLink to="/" icon={LayoutDashboard} label="Routine" data-tutorial="view-schedule" />
+                <NavLink to="/quiz" icon={ClipboardList} label="Quiz Rooms" data-tutorial="quiz-booking" />
+                <NavLink to="/view-quiz" icon={ClipboardList} label="Quiz Schedule" data-tutorial="quiz-schedule" />
+                <NavLink to="/book" icon={Calendar} label="Book Room" data-tutorial="book-room" />
+                {isAdmin && <NavLink to="/upload" icon={Upload} label="Upload" data-tutorial="upload-schedule" />}
               </>
             )}
           </div>
@@ -91,9 +94,11 @@ const Navigation = () => {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <AppContent />
-      </Router>
+      <TutorialProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </TutorialProvider>
     </AuthProvider>
   );
 }
@@ -102,6 +107,7 @@ function AppContent() {
   return (
     <div className="min-h-screen bg-slate-50 pb-12">
       <Navigation />
+      <TutorialManager />
       <main className="container mx-auto px-4">
         <Routes>
           <Route path="/login" element={<AdminLogin />} />

@@ -148,11 +148,81 @@ router.get('/me', auth, async (req, res) => {
                 email: req.user.email,
                 department: req.user.department,
                 role: req.user.role,
-                batch: req.user.batch
+                batch: req.user.batch,
+                tutorialCompleted: req.user.tutorialCompleted,
+                tutorialProgress: req.user.tutorialProgress
             }
         });
     } catch (error) {
         console.error('Get user error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   PUT /api/auth/tutorial-skip
+// @desc    Mark tutorial as skipped
+// @access  Private
+router.put('/tutorial-skip', auth, async (req, res) => {
+    try {
+        req.user.tutorialProgress.skipped = true;
+        req.user.tutorialProgress.lastAccessed = new Date();
+        await req.user.save();
+
+        res.json({
+            success: true,
+            message: 'Tutorial skipped successfully'
+        });
+    } catch (error) {
+        console.error('Tutorial skip error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   PUT /api/auth/tutorial-complete
+// @desc    Mark tutorial as completed
+// @access  Private
+router.put('/tutorial-complete', auth, async (req, res) => {
+    try {
+        req.user.tutorialCompleted = true;
+        req.user.tutorialProgress.lastAccessed = new Date();
+        await req.user.save();
+
+        res.json({
+            success: true,
+            message: 'Tutorial completed successfully'
+        });
+    } catch (error) {
+        console.error('Tutorial complete error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   PUT /api/auth/tutorial-reset
+// @desc    Reset tutorial progress
+// @access  Private
+router.put('/tutorial-reset', auth, async (req, res) => {
+    try {
+        req.user.tutorialCompleted = false;
+        req.user.tutorialProgress = {
+            currentStep: 0,
+            completedSteps: [],
+            lastAccessed: null,
+            skipped: false
+        };
+        await req.user.save();
+
+        res.json({
+            success: true,
+            message: 'Tutorial reset successfully'
+        });
+    } catch (error) {
+        console.error('Tutorial reset error:', error);
         res.status(500).json({ 
             error: 'Server error' 
         });

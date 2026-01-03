@@ -21,8 +21,7 @@ const bookingSchema = new mongoose.Schema({
     },
     batch: {
         type: String,
-        required: true,
-        enum: ['CSE 21', 'CSE 22', 'CSE 23', 'CSE 24', 'MSc(CSE)']
+        required: true
     },
     bookedBy: {
         name: {

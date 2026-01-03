@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
-import { checkAvailability, createBooking } from '../services/api';
+import { checkAvailability, createBooking, getBatches } from '../services/api';
 import { Clock, MapPin, Users, Calendar as CalendarIcon, Check, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useTutorial } from '../context/TutorialContext';
 
 const BookRoom = () => {
     const { user } = useAuth();
+    const { hideDemoRoom } = useTutorial();
     const [date, setDate] = useState(new Date());
     const [selectedSlot, setSelectedSlot] = useState(null);
     const [availability, setAvailability] = useState(null);
@@ -20,6 +22,9 @@ const BookRoom = () => {
     const [bookingStatus, setBookingStatus] = useState('idle'); // idle, submitting, success, error
     const [bookingMessage, setBookingMessage] = useState('');
 
+    // Dynamic batches from database
+    const [batches, setBatches] = useState(['CSE 21', 'CSE 22', 'CSE 23', 'CSE 24', 'MSc(CSE)']); // Default fallback
+
     const timeSlots = [
         { start: '08:00', end: '09:15', label: '8:00 AM - 9:15 AM' },
         { start: '09:15', end: '10:30', label: '9:15 AM - 10:30 AM' },
@@ -29,7 +34,21 @@ const BookRoom = () => {
         { start: '15:45', end: '17:00', label: '3:45 PM - 5:00 PM' },
     ];
 
-    const batches = ['CSE 21', 'CSE 22', 'CSE 23', 'CSE 24', 'MSc(CSE)'];
+    // Fetch batches from database
+    useEffect(() => {
+        const fetchBatches = async () => {
+            try {
+                const response = await getBatches();
+                if (response.data && response.data.length > 0) {
+                    setBatches(response.data);
+                }
+            } catch (error) {
+                console.error('Failed to fetch batches:', error);
+                // Keep default batches as fallback
+            }
+        };
+        fetchBatches();
+    }, []);
 
     useEffect(() => {
         if (date && selectedSlot) {
@@ -44,7 +63,14 @@ const BookRoom = () => {
         try {
             const formattedDate = date.toISOString();
             const response = await checkAvailability(formattedDate, selectedSlot.start, selectedSlot.end);
-            setAvailability(response.data);
+            let availabilityData = response.data;
+            
+            // Hide DEMO-101 after tutorial completion or skip
+            if (hideDemoRoom && availabilityData.available) {
+                availabilityData.available = availabilityData.available.filter(room => room.roomNumber !== 'DEMO-101');
+            }
+            
+            setAvailability(availabilityData);
         } catch (error) {
             console.error(error);
         } finally {
@@ -95,7 +121,7 @@ const BookRoom = () => {
                 <p className="text-slate-500">Select a date and time to see available classrooms</p>
             </div>
 
-            <div className="grid md:grid-cols-12 gap-8">
+            <div className="grid md:grid-cols-12 gap-8" data-tutorial="booking-form">
                 {/* Left Column: Controls */}
                 <div className="md:col-span-4 space-y-6">
                     {/* Calendar */}
@@ -104,7 +130,7 @@ const BookRoom = () => {
                             <CalendarIcon size={18} className="text-primary-500" />
                             Select Date
                         </h3>
-                        <div className="calendar-wrapper">
+                        <div className="calendar-wrapper" data-tutorial="select-date">
                             <Calendar
                                 onChange={setDate}
                                 value={date}
@@ -120,7 +146,7 @@ const BookRoom = () => {
                             <Clock size={18} className="text-primary-500" />
                             Select Time
                         </h3>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-2 gap-3" data-tutorial="select-time">
                             {timeSlots.map(slot => (
                                 <button
                                     key={slot.start}
@@ -163,12 +189,13 @@ const BookRoom = () => {
                                 </span>
                             </div>
 
-                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4" data-tutorial="available-rooms">
                                 {availability?.available?.map(room => (
                                     <button
                                         key={room._id}
                                         onClick={() => setSelectedRoom(room)}
                                         className="group relative p-4 bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-primary-300 transition-all text-left"
+                                        data-tutorial={room.roomNumber === 'DEMO-101' ? 'demo-room-card' : undefined}
                                     >
                                         <div className="flex justify-between items-start mb-2">
                                             <span className="font-bold text-lg text-slate-700 group-hover:text-primary-600">
@@ -261,7 +288,7 @@ const BookRoom = () => {
             {/* Booking Modal */}
             {selectedRoom && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-scale-in">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-scale-in" style={{ marginTop: '-80px' }}>
                         <div className="p-6 bg-gradient-to-r from-primary-600 to-secondary-600 text-white flex justify-between items-start">
                             <div>
                                 <h3 className="text-xl font-bold">Book {selectedRoom.roomNumber}</h3>
@@ -279,21 +306,15 @@ const BookRoom = () => {
                             {!(user?.role === 'cr' && user?.batch) && (
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Select Batch</label>
-                                    <div className="grid grid-cols-2 gap-2">
+                                    <select
+                                        value={batch}
+                                        onChange={(e) => setBatch(e.target.value)}
+                                        className="w-full px-4 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-primary-500 focus:outline-none text-slate-700"
+                                    >
                                         {batches.map(b => (
-                                            <button
-                                                type="button"
-                                                key={b}
-                                                onClick={() => setBatch(b)}
-                                                className={`py-2 px-3 rounded-lg text-sm font-medium transition-colors border
-                        ${batch === b
-                                                        ? 'bg-primary-50 border-primary-500 text-primary-700'
-                                                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-                                            >
-                                                {b}
-                                            </button>
+                                            <option key={b} value={b}>{b}</option>
                                         ))}
-                                    </div>
+                                    </select>
                                 </div>
                             )}
 
