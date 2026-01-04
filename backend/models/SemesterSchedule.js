@@ -47,6 +47,10 @@ const semesterScheduleSchema = new mongoose.Schema({
         type: String,
         default: '' // Optional nickname/short name for the course
     },
+    section: {
+        type: String,
+        default: '' // Optional section name for split slots
+    },
     batch: {
         type: String,
         default: ''
@@ -79,7 +83,8 @@ const semesterScheduleSchema = new mongoose.Schema({
         default: ''
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    collection: 'semesterschedules'
 });
 
 // Create compound indexes for efficient queries

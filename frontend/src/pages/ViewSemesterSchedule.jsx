@@ -16,7 +16,7 @@ const ViewSemesterSchedule = () => {
     const [saving, setSaving] = useState(false);
     
     // Week navigation state
-    const [weekOffset, setWeekOffset] = useState(0); // 0 = this week, 1 = next week, etc.
+    const [weekOffset, setWeekOffset] = useState(user?.role === 'admin' || user?.role === 'cr' ? 0 : 1); // 0 = base template (admin/CR only), 1 = this week, etc.
     const [currentWeekStart, setCurrentWeekStart] = useState(null);
     
     // Schedule grid state
@@ -28,6 +28,7 @@ const ViewSemesterSchedule = () => {
     const [formData, setFormData] = useState({
         course: '',
         courseNickname: '',
+        section: '',
         batch: '',
         batchSelection: '', // For course fetching
         teacher: '',
@@ -89,7 +90,11 @@ const ViewSemesterSchedule = () => {
 
     // Format week display
     const getWeekDisplay = (offset) => {
-        const weekStart = getWeekStartDate(offset);
+        if (offset === 0) {
+            return 'Base Template';
+        }
+        
+        const weekStart = getWeekStartDate(offset - 1);
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 6);
         
@@ -99,10 +104,10 @@ const ViewSemesterSchedule = () => {
             return `${month} ${day}`;
         };
         
-        if (offset === 0) {
+        if (offset === 1) {
             return `This Week (${formatDate(weekStart)} - ${formatDate(weekEnd)})`;
         }
-        return `Week ${offset + 1} (${formatDate(weekStart)} - ${formatDate(weekEnd)})`;
+        return `Week ${offset} (${formatDate(weekStart)} - ${formatDate(weekEnd)})`;
     };
 
     useEffect(() => {
@@ -120,7 +125,7 @@ const ViewSemesterSchedule = () => {
     const fetchSchedules = async () => {
         try {
             setLoadingSchedules(true);
-            const weekStart = weekOffset > 0 ? getWeekStartDate(weekOffset) : null;
+            const weekStart = weekOffset >= 1 ? getWeekStartDate(weekOffset - 1) : null;
             const response = await getSemesterSchedule(selectedPage, weekStart?.toISOString());
             console.log('API returned schedules:', response.data.schedules.length, 'items');
             console.log('Monday 08:00 schedules:', response.data.schedules.filter(s => s.day === 'Monday' && s.timeSlot.start === '08:00'));
@@ -324,7 +329,7 @@ const ViewSemesterSchedule = () => {
                 timeSlot: { start: slot.start, end: slot.end },
                 newTotalSubSlots: nextTotal,
                 isTemplate: weekOffset === 0,
-                weekStartDate: weekOffset > 0 ? getWeekStartDate(weekOffset).toISOString() : null
+                weekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
             });
             
             console.log('Split response:', response.data);
@@ -388,6 +393,7 @@ const ViewSemesterSchedule = () => {
                 id: schedule._id,
                 course: schedule.course || '',
                 courseNickname: schedule.courseNickname || '',
+                section: schedule.section || '',
                 batch: schedule.batch || currentBatch,
                 batchSelection: editBatchSelection,
                 teacher: schedule.teacher || '',
@@ -404,6 +410,7 @@ const ViewSemesterSchedule = () => {
             setFormData({
                 course: '',
                 courseNickname: '',
+                section: '',
                 batch: currentBatch, // Auto-fill from page batch
                 batchSelection: defaultBatchSelection,
                 teacher: '',
@@ -440,6 +447,7 @@ const ViewSemesterSchedule = () => {
                     },
                     course: formData.course,
                     courseNickname: formData.courseNickname,
+                    section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
                     roomNumber: formData.roomNumber,
@@ -447,8 +455,8 @@ const ViewSemesterSchedule = () => {
                     statusNote: formData.statusNote,
                     subSlotIndex: selectedSlot.subSlotIndex || 0,
                     totalSubSlots: selectedSlot.totalSubSlots || 1,
-                    isTemplate: weekOffset === 0, // Template if current week, override if future week
-                    weekStartDate: weekOffset > 0 ? getWeekStartDate(weekOffset).toISOString() : null
+                    isTemplate: weekOffset === 0, // Template if base, override if specific week
+                    weekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
                 };
                 
                 console.log('Creating schedule entry:', scheduleData);
@@ -457,13 +465,14 @@ const ViewSemesterSchedule = () => {
                 await updateSemesterEntry(formData.id, {
                     course: formData.course,
                     courseNickname: formData.courseNickname,
+                    section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
                     roomNumber: formData.roomNumber,
                     status: formData.status,
                     statusNote: formData.statusNote,
                     timeSlot: { end: formData.endTime },
-                    currentWeekStartDate: weekOffset > 0 ? getWeekStartDate(weekOffset).toISOString() : null
+                    currentWeekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
                 });
             }
 
@@ -674,25 +683,41 @@ const ViewSemesterSchedule = () => {
                     </div>
 
                     {/* Week Navigation */}
-                    <div className="glass-card rounded-xl p-4 border border-slate-100">
+                    <div className={`glass-card rounded-xl p-4 border ${weekOffset === 1 ? 'border-green-300 bg-green-50/30' : 'border-slate-100'}`}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                                <Calendar size={20} className="text-primary-600" />
+                                <Calendar size={20} className={weekOffset === 1 ? 'text-green-600' : 'text-primary-600'} />
                                 <span className="font-semibold text-slate-700">
                                     {getWeekDisplay(weekOffset)}
                                 </span>
-                                {weekOffset > 0 && (
+                                {weekOffset === 0 && (
+                                    <>
+                                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">
+                                            Default schedule template
+                                        </span>
+                                        <span className="text-xs text-slate-500 italic ml-2">
+                                            Input class routine of your class here
+                                        </span>
+                                    </>
+                                )}
+                                {weekOffset === 1 && (
+                                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium flex items-center gap-1">
+                                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                                        Current Week
+                                    </span>
+                                )}
+                                {weekOffset >= 2 && (
                                     <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium">
-                                        Week-specific schedule
+                                        Upcoming Week
                                     </span>
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={() => setWeekOffset(Math.max(0, weekOffset - 1))}
-                                    disabled={weekOffset === 0}
+                                    onClick={() => setWeekOffset(Math.max(user?.role === 'admin' || user?.role === 'cr' ? 0 : 1, weekOffset - 1))}
+                                    disabled={weekOffset === 0 || (weekOffset === 1 && user?.role !== 'admin' && user?.role !== 'cr')}
                                     className={`px-3 py-1.5 rounded-lg transition-all text-sm font-medium ${
-                                        weekOffset === 0
+                                        weekOffset === 0 || (weekOffset === 1 && user?.role !== 'admin' && user?.role !== 'cr')
                                             ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                                             : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
                                     }`}
@@ -713,6 +738,21 @@ const ViewSemesterSchedule = () => {
                             </div>
                         </div>
                     </div>
+
+                    {/* Current Week Banner */}
+                    {weekOffset === 1 && (
+                        <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-4 shadow-md border border-green-400">
+                            <div className="flex items-center gap-3 text-white">
+                                <Calendar size={24} className="flex-shrink-0" />
+                                <div>
+                                    <p className="font-bold text-lg">📅 Viewing Current Week's Schedule</p>
+                                    <p className="text-sm text-green-50">
+                                        {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} - You are viewing this week's active schedule
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Schedule Grid */}
                     {loadingSchedules ? (
@@ -753,11 +793,20 @@ const ViewSemesterSchedule = () => {
                                     <tbody>
                                         {days.map(day => {
                                             let skipUntilIndex = -1;
+                                            const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+                                            const isToday = weekOffset === 1 && day === today;
 
                                             return (
-                                                <tr key={day} className="hover:bg-slate-50/50 transition-colors">
-                                                    <td className="p-4 font-medium text-slate-700 border-r border-b bg-white sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
-                                                        {day}
+                                                <tr key={day} className={`transition-colors ${isToday ? 'bg-green-50/50 hover:bg-green-50' : 'hover:bg-slate-50/50'}`}>
+                                                    <td className={`p-4 font-medium border-r border-b sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${isToday ? 'bg-green-100 text-green-800' : 'text-slate-700 bg-white'}`}>
+                                                        <div className="flex items-center gap-2">
+                                                            {day}
+                                                            {isToday && (
+                                                                <span className="px-2 py-0.5 text-xs font-semibold bg-green-500 text-white rounded-full">
+                                                                    Today
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </td>
 
                                                     {timeSlots.map((slot, index) => {
@@ -858,15 +907,28 @@ const ViewSemesterSchedule = () => {
                                                                                                     }`} />
                                                                                                     <div className="flex-1 min-w-0">
                                                                                                         <div className="flex items-center justify-between gap-1">
-                                                                                                            <span className={`font-bold leading-tight truncate ${
-                                                                                                                totalSubSlots === 4 ? 'text-xs' : 'text-sm'
-                                                                                                            } ${
-                                                                                                                subSlot.status === 'cancelled' ? 'text-red-900 line-through' :
-                                                                                                                subSlot.status === 'rescheduled' ? 'text-amber-900' :
-                                                                                                                'text-primary-900'
-                                                                                                            }`} title={subSlot.course}>
-                                                                                                                {subSlot.course}
-                                                                                                            </span>
+                                                                                                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                                                                                <span className={`font-bold leading-tight truncate ${
+                                                                                                                    totalSubSlots === 4 ? 'text-xs' : 'text-sm'
+                                                                                                                } ${
+                                                                                                                    subSlot.status === 'cancelled' ? 'text-red-900 line-through' :
+                                                                                                                    subSlot.status === 'rescheduled' ? 'text-amber-900' :
+                                                                                                                    'text-primary-900'
+                                                                                                                }`} title={subSlot.course}>
+                                                                                                                    {subSlot.course}
+                                                                                                                </span>
+                                                                                                                {subSlot.section && (
+                                                                                                                    <span className={`font-medium leading-tight flex-shrink-0 ${
+                                                                                                                        totalSubSlots === 4 ? 'text-xs' : 'text-sm'
+                                                                                                                    } ${
+                                                                                                                        subSlot.status === 'cancelled' ? 'text-red-700 line-through' :
+                                                                                                                        subSlot.status === 'rescheduled' ? 'text-amber-700' :
+                                                                                                                        'text-primary-700'
+                                                                                                                    }`} title={subSlot.section}>
+                                                                                                                        | {subSlot.section}
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                                                            </div>
                                                                                                             {subSlot.roomNumber && (
                                                                                                                 <span className={`text-xs font-medium flex-shrink-0 ${
                                                                                                                     subSlot.status === 'cancelled' ? 'text-red-600' :
@@ -996,10 +1058,17 @@ const ViewSemesterSchedule = () => {
                                     </span>
                                 )}
                             </p>
-                            {weekOffset > 0 && modalMode === 'create' && (
+                            {weekOffset === 0 && modalMode === 'create' && (
+                                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                                    <p className="text-xs text-blue-700 font-medium">
+                                        📋 This entry will be added to the base template (applies to all weeks by default)
+                                    </p>
+                                </div>
+                            )}
+                            {weekOffset >= 1 && modalMode === 'create' && (
                                 <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
                                     <p className="text-xs text-amber-700 font-medium">
-                                        ⚠ This entry will only apply to {getWeekDisplay(weekOffset)}
+                                        ⚠ This entry will only apply to {getWeekDisplay(weekOffset)} (does not affect base template)
                                     </p>
                                 </div>
                             )}
@@ -1096,6 +1165,22 @@ const ViewSemesterSchedule = () => {
                                 </datalist>
                                 <p className="text-xs text-slate-400 mt-1">
                                     Short name to display in schedule. Start typing to see suggestions.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Section (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formData.section}
+                                    onChange={(e) => setFormData({ ...formData, section: e.target.value })}
+                                    placeholder="e.g., A, B, Section 1"
+                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                />
+                                <p className="text-xs text-slate-400 mt-1">
+                                    Section name for split slots (shown next to course name).
                                 </p>
                             </div>
 

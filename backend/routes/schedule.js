@@ -536,6 +536,7 @@ router.post('/split-slot', auth, adminOnly, async (req, res) => {
                     timeSlot: existingSlots[0].timeSlot,
                     course: existingData?.course || '',
                     courseNickname: existingData?.courseNickname || '',
+                    section: existingData?.section || '',
                     batch: existingData?.batch || '',
                     teacher: existingData?.teacher || '',
                     department,
@@ -1289,7 +1290,7 @@ router.post('/semester/:pageNumber', auth, async (req, res) => {
             return res.status(400).json({ error: 'Invalid page number' });
         }
 
-        const { day, timeSlot, course, courseNickname, batch, teacher, weekStartDate, isTemplate, status, statusNote, roomNumber, subSlotIndex, totalSubSlots } = req.body;
+        const { day, timeSlot, course, courseNickname, section, batch, teacher, weekStartDate, isTemplate, status, statusNote, roomNumber, subSlotIndex, totalSubSlots } = req.body;
         const department = req.user.department;
 
         if (!day || !timeSlot?.start || !timeSlot?.end) {
@@ -1335,6 +1336,7 @@ router.post('/semester/:pageNumber', auth, async (req, res) => {
             timeSlot,
             course: course || '',
             courseNickname: courseNickname || '',
+            section: section || '',
             batch: batch || '',
             teacher: teacher || '',
             roomNumber: roomNumber || '',
@@ -1369,7 +1371,7 @@ router.post('/semester/:pageNumber', auth, async (req, res) => {
 router.put('/semester/:id', auth, async (req, res) => {
     try {
         const { id } = req.params;
-        const { course, courseNickname, batch, teacher, timeSlot, status, statusNote, roomNumber, currentWeekStartDate } = req.body;
+        const { course, courseNickname, section, batch, teacher, timeSlot, status, statusNote, roomNumber, currentWeekStartDate } = req.body;
 
         console.log('UPDATE request:', { id, course, batch, roomNumber, currentWeekStartDate, isTemplate: req.body.isTemplate });
 
@@ -1404,6 +1406,7 @@ router.put('/semester/:id', auth, async (req, res) => {
                 // Update the existing override
                 if (course !== undefined) existingOverride.course = course;
                 if (courseNickname !== undefined) existingOverride.courseNickname = courseNickname;
+                if (section !== undefined) existingOverride.section = section;
                 if (batch !== undefined) existingOverride.batch = batch;
                 if (teacher !== undefined) existingOverride.teacher = teacher;
                 if (roomNumber !== undefined) existingOverride.roomNumber = roomNumber;
@@ -1430,6 +1433,7 @@ router.put('/semester/:id', auth, async (req, res) => {
                     },
                     course: course !== undefined ? course : schedule.course,
                     courseNickname: courseNickname !== undefined ? courseNickname : schedule.courseNickname,
+                    section: section !== undefined ? section : schedule.section,
                     batch: batch !== undefined ? batch : schedule.batch,
                     teacher: teacher !== undefined ? teacher : schedule.teacher,
                     roomNumber: roomNumber !== undefined ? roomNumber : schedule.roomNumber,
@@ -1457,6 +1461,7 @@ router.put('/semester/:id', auth, async (req, res) => {
         console.log('Updating schedule directly:', { course, batch, roomNumber });
         if (course !== undefined) schedule.course = course;
         if (courseNickname !== undefined) schedule.courseNickname = courseNickname;
+        if (section !== undefined) schedule.section = section;
         if (batch !== undefined) schedule.batch = batch;
         if (teacher !== undefined) schedule.teacher = teacher;
         if (roomNumber !== undefined) schedule.roomNumber = roomNumber;
@@ -1519,8 +1524,8 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
             const existingData = existingSchedules[0];
             
             // If going from 1 to multiple (2 or 4), preserve data in subSlotIndex 0
-            if (newTotalSubSlots > 1 && existingData.course) {
-                // Update existing entry to be subSlot 0
+            if (newTotalSubSlots > 1) {
+                // Update existing entry to be subSlot 0 (preserve data if any)
                 existingData.subSlotIndex = 0;
                 existingData.totalSubSlots = newTotalSubSlots;
                 await existingData.save();
@@ -1533,6 +1538,7 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
                         timeSlot,
                         course: '',
                         courseNickname: '',
+                        section: '',
                         batch: '',
                         teacher: '',
                         roomNumber: '',
@@ -1549,7 +1555,7 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
 
                 return res.json({
                     success: true,
-                    message: `Slot split into ${newTotalSubSlots} divisions. Existing data preserved in first division.`
+                    message: `Slot split into ${newTotalSubSlots} divisions${existingData.course ? '. Existing data preserved in first division.' : '.'}`
                 });
             } else if (newTotalSubSlots === 1) {
                 // Going back to single slot, just update totalSubSlots
@@ -1593,6 +1599,8 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
                             day,
                             timeSlot,
                             course: '',
+                            courseNickname: '',
+                            section: '',
                             batch: '',
                             teacher: '',
                             department,
@@ -1610,13 +1618,16 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
         } else {
             // No existing schedules, create empty sub-slots
             for (let i = 0; i < newTotalSubSlots; i++) {
-                const newSubSlot = new Schedule({
+                const newSubSlot = new SemesterSchedule({
                     semesterPageNumber: pageNum,
                     day,
                     timeSlot,
                     course: '',
+                    courseNickname: '',
+                    section: '',
                     batch: '',
                     teacher: '',
+                    roomNumber: '',
                     department,
                     subSlotIndex: i,
                     totalSubSlots: newTotalSubSlots,

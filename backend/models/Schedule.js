@@ -53,6 +53,10 @@ const scheduleSchema = new mongoose.Schema({
         type: String,
         default: '' // Optional nickname/short name for the course
     },
+    section: {
+        type: String,
+        default: '' // Optional section name for split slots
+    },
     batch: {
         type: String,
         default: ''

@@ -21,6 +21,7 @@ const ViewSchedule = () => {
     const [formData, setFormData] = useState({
         course: '',
         courseNickname: '',
+        section: '',
         batch: '',
         teacher: '',
         endTime: ''
@@ -174,6 +175,7 @@ const ViewSchedule = () => {
                 id: schedule._id,
                 course: schedule.course || '',
                 courseNickname: schedule.courseNickname || '',
+                section: schedule.section || '',
                 batch: schedule.batch || 'All',
                 teacher: schedule.teacher || '',
                 endTime: schedule.timeSlot.end
@@ -184,6 +186,7 @@ const ViewSchedule = () => {
             setFormData({
                 course: '',
                 courseNickname: '',
+                section: '',
                 batch: 'All',
                 teacher: '',
                 endTime: slot.end,
@@ -214,6 +217,7 @@ const ViewSchedule = () => {
                     },
                     course: formData.course,
                     courseNickname: formData.courseNickname,
+                    section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
                     subSlotIndex: formData.subSlotIndex || 0
@@ -222,6 +226,7 @@ const ViewSchedule = () => {
                 await updateScheduleEntry(formData.id, {
                     course: formData.course,
                     courseNickname: formData.courseNickname,
+                    section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
                     timeSlot: { end: formData.endTime }
@@ -424,9 +429,16 @@ const ViewSchedule = () => {
                                                                                         <div className="flex items-start gap-1 mb-1">
                                                                                             <BookOpen size={totalSubSlots === 4 ? 12 : 14} className={`${subSlot.needsReview ? 'text-red-500' : 'text-primary-500'} mt-0.5 flex-shrink-0`} />
                                                                                             <div className="flex-1 min-w-0 flex justify-between items-start gap-1">
-                                                                                                <span className={`font-bold ${subSlot.needsReview ? 'text-red-900' : 'text-primary-900'} ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'} leading-tight truncate`} title={subSlot.courseNickname || subSlot.course || subSlot.rawContent}>
-                                                                                                    {subSlot.courseNickname || subSlot.course || subSlot.rawContent?.slice(0, 30)}
-                                                                                                </span>
+                                                                                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                                                                    <span className={`font-bold ${subSlot.needsReview ? 'text-red-900' : 'text-primary-900'} ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'} leading-tight truncate`} title={subSlot.courseNickname || subSlot.course || subSlot.rawContent}>
+                                                                                                        {subSlot.courseNickname || subSlot.course || subSlot.rawContent?.slice(0, 30)}
+                                                                                                    </span>
+                                                                                                    {subSlot.section && (
+                                                                                                        <span className={`font-medium ${subSlot.needsReview ? 'text-red-700' : 'text-primary-700'} ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'} leading-tight flex-shrink-0`} title={subSlot.section}>
+                                                                                                            | {subSlot.section}
+                                                                                                        </span>
+                                                                                                    )}
+                                                                                                </div>
                                                                                                 {subSlot.roomNumber && (
                                                                                                     <span className={`${totalSubSlots === 4 ? 'text-[10px]' : 'text-xs'} text-primary-600 font-semibold flex-shrink-0`}>
                                                                                                         {subSlot.roomNumber}
@@ -532,6 +544,22 @@ const ViewSchedule = () => {
                                 />
                                 <p className="text-xs text-slate-400 mt-1">
                                     Short name to display in schedule. Start typing to see suggestions.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Section (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formData.section}
+                                    onChange={(e) => setFormData({ ...formData, section: e.target.value })}
+                                    placeholder="e.g., A, B, Section 1"
+                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                />
+                                <p className="text-xs text-slate-400 mt-1">
+                                    Section name for split slots (shown next to course name).
                                 </p>
                             </div>
 
