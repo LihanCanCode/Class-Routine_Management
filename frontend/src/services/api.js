@@ -54,6 +54,10 @@ export const getSchedules = async (filters = {}) => {
     return await API.get('/schedule', { params: filters });
 };
 
+export const getRooms = async () => {
+    return await API.get('/schedule/rooms');
+};
+
 export const checkAvailability = async (date, startTime, endTime) => {
     return await API.get('/schedule/availability', {
         params: { date, startTime, endTime }
@@ -87,6 +91,14 @@ export const deleteScheduleEntry = async (id) => {
     return await API.delete(`/schedule/manual/${id}`);
 };
 
+export const splitSlot = async (roomNumber, day, timeSlot) => {
+    return await API.post('/schedule/split-slot', {
+        roomNumber,
+        day,
+        timeSlot
+    });
+};
+
 // Quiz Room Booking
 export const getQuizConfig = async () => {
     return await API.get('/quiz-booking/config');
@@ -114,6 +126,10 @@ export const getCoursesByBatch = async (batch) => {
     return await API.get('/quiz-booking/courses-by-batch', {
         params: { batch }
     });
+};
+
+export const getCourseNicknames = async () => {
+    return await API.get('/schedule/course-nicknames');
 };
 
 // Schedule PDF Management
@@ -175,6 +191,28 @@ export const updateSemesterPageBatchName = async (pageNumber, batchName) => {
 
 export const deleteSemesterPage = async (pageNumber) => {
     return await API.delete(`/schedule/semester-page/${pageNumber}`);
+};
+
+// Semester Schedule Management (Manual Input)
+export const getSemesterSchedule = async (pageNumber, weekStartDate = null) => {
+    const params = weekStartDate ? { weekStartDate } : {};
+    return await API.get(`/schedule/semester/${pageNumber}`, { params });
+};
+
+export const createSemesterEntry = async (pageNumber, scheduleData) => {
+    return await API.post(`/schedule/semester/${pageNumber}`, scheduleData);
+};
+
+export const updateSemesterEntry = async (id, scheduleData) => {
+    return await API.put(`/schedule/semester/${id}`, scheduleData);
+};
+
+export const deleteSemesterEntry = async (id) => {
+    return await API.delete(`/schedule/semester/${id}`);
+};
+
+export const splitSemesterSlot = async (pageNumber, splitData) => {
+    return await API.post(`/schedule/semester/${pageNumber}/split-slot`, splitData);
 };
 
 // Tutorial endpoints

@@ -1,15 +1,9 @@
 const mongoose = require('mongoose');
 
-const scheduleSchema = new mongoose.Schema({
-    roomNumber: {
-        type: String,
-        required: function() {
-            return !this.semesterPageNumber; // Required only for room-wise schedules
-        }
-    },
+const semesterScheduleSchema = new mongoose.Schema({
     semesterPageNumber: {
         type: Number,
-        default: null // For semester-wise schedules
+        required: true
     },
     // Weekly scheduling fields
     isTemplate: {
@@ -61,6 +55,10 @@ const scheduleSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    roomNumber: {
+        type: String,
+        default: ''
+    },
     // Class status for cancellation/rescheduling
     status: {
         type: String,
@@ -71,30 +69,22 @@ const scheduleSchema = new mongoose.Schema({
         type: String,
         default: '' // Optional note for cancellation/rescheduling reason
     },
-    isBiWeekly: {
-        type: Boolean,
-        default: false
-    },
-    needsReview: {
-        type: Boolean,
-        default: false
-    },
-    semester: {
-        type: String,
-        default: 'Current'
-    },
     department: {
         type: String,
         default: 'CSE',
         enum: ['CSE', 'EEE', 'MPE', 'CEE', 'BTM']
+    },
+    rawContent: {
+        type: String,
+        default: ''
     }
 }, {
     timestamps: true
 });
 
 // Create compound indexes for efficient queries
-scheduleSchema.index({ roomNumber: 1, day: 1, 'timeSlot.start': 1, subSlotIndex: 1 });
-scheduleSchema.index({ semesterPageNumber: 1, day: 1, 'timeSlot.start': 1, subSlotIndex: 1 });
-scheduleSchema.index({ semesterPageNumber: 1, weekStartDate: 1, day: 1 }); // For weekly schedule queries
+semesterScheduleSchema.index({ semesterPageNumber: 1, day: 1, 'timeSlot.start': 1, subSlotIndex: 1 });
+semesterScheduleSchema.index({ semesterPageNumber: 1, weekStartDate: 1, isTemplate: 1 });
+semesterScheduleSchema.index({ semesterPageNumber: 1, isTemplate: 1, day: 1 });
 
-module.exports = mongoose.model('Schedule', scheduleSchema);
+module.exports = mongoose.model('SemesterSchedule', semesterScheduleSchema);

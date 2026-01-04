@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const Schedule = require('../models/Schedule');
+const SemesterSchedule = require('../models/SemesterSchedule');
 const SchedulePDF = require('../models/SchedulePDF');
 const Room = require('../models/Room');
 const Booking = require('../models/Booking');
@@ -12,6 +13,36 @@ const { parsePDFSchedule } = require('../utils/pdfParser');
 const { parseSemesterPDF } = require('../utils/pdfPageParser');
 const auth = require('../middleware/auth');
 const { adminOnly, authOrGuest } = require('../middleware/auth');
+
+// ============================================================================
+// WEEK UTILITY FUNCTIONS
+// ============================================================================
+
+// Get the start of week (Sunday) for a given date
+const getWeekStartDate = (date = new Date()) => {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day; // Subtract days to get to Sunday
+    const weekStart = new Date(d.setDate(diff));
+    weekStart.setHours(0, 0, 0, 0); // Reset to midnight
+    return weekStart;
+};
+
+// Get week offset from current week (0 = this week, 1 = next week, etc.)
+const getWeekByOffset = (offset = 0) => {
+    const today = new Date();
+    const weekStart = getWeekStartDate(today);
+    weekStart.setDate(weekStart.getDate() + (offset * 7));
+    return weekStart;
+};
+
+// Check if a date is within allowed range (current week + 8 weeks)
+const isWithinAllowedWeekRange = (weekStartDate) => {
+    const currentWeekStart = getWeekStartDate(new Date());
+    const maxWeekStart = getWeekByOffset(8);
+    const checkDate = new Date(weekStartDate);
+    return checkDate >= currentWeekStart && checkDate <= maxWeekStart;
+};
 
 // Configure multer for file upload
 const storage = multer.diskStorage({
@@ -118,20 +149,48 @@ router.get('/', async (req, res) => {
     try {
         const { day, roomNumber } = req.query;
 
-        const filter = {};
+        const filter = { semesterPageNumber: null }; // Only room-wise schedules
         if (day) filter.day = day;
         if (roomNumber) filter.roomNumber = roomNumber;
 
-        const schedules = await Schedule.find(filter).sort({ day: 1, 'timeSlot.start': 1 });
+        const schedules = await Schedule.find(filter).sort({ day: 1, 'timeSlot.start': 1, subSlotIndex: 1 });
+
+        // Merge sub-slots: Group by unique (roomNumber, day, timeSlot.start) and return all sub-slots
+        const mergedSchedules = [];
+        const slotMap = new Map();
+
+        schedules.forEach(schedule => {
+            const key = `${schedule.roomNumber}-${schedule.day}-${schedule.timeSlot.start}-${schedule.subSlotIndex}`;
+            if (!slotMap.has(key)) {
+                slotMap.set(key, schedule);
+                mergedSchedules.push(schedule);
+            }
+        });
 
         res.json({
             success: true,
-            count: schedules.length,
-            schedules
+            count: mergedSchedules.length,
+            schedules: mergedSchedules
         });
     } catch (error) {
         console.error('Get schedules error:', error);
         res.status(500).json({ error: 'Failed to fetch schedules' });
+    }
+});
+
+// @route   GET /api/schedule/rooms
+// @desc    Get all rooms
+// @access  Public
+router.get('/rooms', async (req, res) => {
+    try {
+        const rooms = await Room.find({}).sort({ roomNumber: 1 });
+        res.json({
+            success: true,
+            rooms: rooms.map(r => r.roomNumber)
+        });
+    } catch (error) {
+        console.error('Get rooms error:', error);
+        res.status(500).json({ error: 'Failed to fetch rooms' });
     }
 });
 
@@ -279,7 +338,7 @@ router.delete('/clear', auth, adminOnly, async (req, res) => {
 // Create a new schedule entry manually
 router.post('/manual', auth, adminOnly, async (req, res) => {
     try {
-        const { roomNumber, day, timeSlot, course, batch, teacher } = req.body;
+        const { roomNumber, day, timeSlot, course, courseNickname, batch, teacher, subSlotIndex } = req.body;
         const department = req.user.department;
 
         if (!roomNumber || !day || !timeSlot?.start || !timeSlot?.end) {
@@ -288,16 +347,29 @@ router.post('/manual', auth, adminOnly, async (req, res) => {
             });
         }
 
-        // Check if slot already exists
+        // Find existing slots to determine totalSubSlots
+        const existingSlots = await Schedule.find({
+            roomNumber,
+            day,
+            'timeSlot.start': timeSlot.start,
+            semesterPageNumber: null
+        });
+
+        const totalSubSlots = existingSlots.length > 0 ? existingSlots[0].totalSubSlots : 1;
+        const targetSubSlotIndex = subSlotIndex !== undefined ? subSlotIndex : 0;
+
+        // Check if this specific sub-slot already has data
         const existing = await Schedule.findOne({
             roomNumber,
             day,
-            'timeSlot.start': timeSlot.start
+            'timeSlot.start': timeSlot.start,
+            subSlotIndex: targetSubSlotIndex,
+            semesterPageNumber: null
         });
 
         if (existing) {
             return res.status(400).json({
-                error: 'A schedule already exists for this slot. Use update instead.'
+                error: 'A schedule already exists for this sub-slot. Use update instead.'
             });
         }
 
@@ -306,9 +378,12 @@ router.post('/manual', auth, adminOnly, async (req, res) => {
             day,
             timeSlot,
             course: course || '',
+            courseNickname: courseNickname || '',
             batch: batch || 'All',
             teacher: teacher || '',
             department,
+            subSlotIndex: targetSubSlotIndex,
+            totalSubSlots,
             rawContent: `${course || ''} ${batch || ''}`.trim()
         });
 
@@ -336,7 +411,7 @@ router.post('/manual', auth, adminOnly, async (req, res) => {
 router.put('/manual/:id', auth, adminOnly, async (req, res) => {
     try {
         const { id } = req.params;
-        const { course, batch, teacher, timeSlot } = req.body;
+        const { course, courseNickname, batch, teacher, timeSlot } = req.body;
 
         const schedule = await Schedule.findById(id);
         if (!schedule) {
@@ -344,6 +419,7 @@ router.put('/manual/:id', auth, adminOnly, async (req, res) => {
         }
 
         if (course !== undefined) schedule.course = course;
+        if (courseNickname !== undefined) schedule.courseNickname = courseNickname;
         if (batch !== undefined) schedule.batch = batch;
         if (teacher !== undefined) schedule.teacher = teacher;
         if (timeSlot?.end) schedule.timeSlot.end = timeSlot.end;
@@ -383,6 +459,105 @@ router.delete('/manual/:id', auth, adminOnly, async (req, res) => {
     } catch (error) {
         console.error('Manual schedule delete error:', error);
         res.status(500).json({ error: 'Failed to delete schedule entry' });
+    }
+});
+
+// Split slot into sub-slots (for room-wise manual entries only)
+router.post('/split-slot', auth, adminOnly, async (req, res) => {
+    try {
+        const { roomNumber, day, timeSlot } = req.body;
+        const department = req.user.department;
+
+        if (!roomNumber || !day || !timeSlot?.start) {
+            return res.status(400).json({
+                error: 'Missing required fields: roomNumber, day, timeSlot.start'
+            });
+        }
+
+        // Find all sub-slots for this time slot
+        const existingSlots = await Schedule.find({
+            roomNumber,
+            day,
+            'timeSlot.start': timeSlot.start,
+            semesterPageNumber: null // Only manual room-wise entries
+        }).sort({ subSlotIndex: 1 });
+
+        if (existingSlots.length === 0) {
+            return res.status(404).json({ error: 'No schedule found for this slot' });
+        }
+
+        const currentTotalSubSlots = existingSlots[0].totalSubSlots;
+        let newTotalSubSlots;
+
+        // Cycle: 1 → 2 → 4 → 1
+        if (currentTotalSubSlots === 1) {
+            newTotalSubSlots = 2;
+        } else if (currentTotalSubSlots === 2) {
+            newTotalSubSlots = 4;
+        } else {
+            newTotalSubSlots = 1; // Reset to unsplit
+        }
+
+        // Delete all existing sub-slots
+        await Schedule.deleteMany({
+            roomNumber,
+            day,
+            'timeSlot.start': timeSlot.start,
+            semesterPageNumber: null
+        });
+
+        // Create new sub-slots
+        const newSlots = [];
+
+        if (newTotalSubSlots === 1) {
+            // Unsplit - preserve data from first sub-slot (Option A)
+            const firstSlot = existingSlots[0];
+            const unSplitSlot = new Schedule({
+                roomNumber,
+                day,
+                timeSlot: firstSlot.timeSlot,
+                course: firstSlot.course,
+                courseNickname: firstSlot.courseNickname,
+                batch: firstSlot.batch,
+                teacher: firstSlot.teacher,
+                department,
+                subSlotIndex: 0,
+                totalSubSlots: 1
+            });
+            newSlots.push(unSplitSlot);
+        } else {
+            // Split into 2 or 4 sub-slots
+            for (let i = 0; i < newTotalSubSlots; i++) {
+                const existingData = existingSlots.find(slot => slot.subSlotIndex === i);
+                
+                const newSlot = new Schedule({
+                    roomNumber,
+                    day,
+                    timeSlot: existingSlots[0].timeSlot,
+                    course: existingData?.course || '',
+                    courseNickname: existingData?.courseNickname || '',
+                    batch: existingData?.batch || '',
+                    teacher: existingData?.teacher || '',
+                    department,
+                    subSlotIndex: i,
+                    totalSubSlots: newTotalSubSlots
+                });
+                newSlots.push(newSlot);
+            }
+        }
+
+        await Schedule.insertMany(newSlots);
+
+        res.json({
+            success: true,
+            message: `Slot ${newTotalSubSlots === 1 ? 'merged' : 'split into ' + newTotalSubSlots}`,
+            totalSubSlots: newTotalSubSlots,
+            slots: newSlots
+        });
+
+    } catch (error) {
+        console.error('Split slot error:', error);
+        res.status(500).json({ error: 'Failed to split slot' });
     }
 });
 
@@ -709,6 +884,31 @@ router.get('/pdf/:type/filtered', auth, async (req, res) => {
     }
 });
 
+// Get unique course nicknames for autocomplete suggestions
+router.get('/course-nicknames', auth, async (req, res) => {
+    try {
+        // Get distinct courseNicknames from both collections
+        const roomWiseNicknames = await Schedule.distinct('courseNickname', {
+            courseNickname: { $exists: true, $ne: '' }
+        });
+        
+        const semesterNicknames = await SemesterSchedule.distinct('courseNickname', {
+            courseNickname: { $exists: true, $ne: '' }
+        });
+        
+        // Combine and remove duplicates
+        const allNicknames = [...new Set([...roomWiseNicknames, ...semesterNicknames])];
+        
+        res.json({
+            success: true,
+            nicknames: allNicknames.sort()
+        });
+    } catch (error) {
+        console.error('Get course nicknames error:', error);
+        res.status(500).json({ error: 'Failed to retrieve course nicknames' });
+    }
+});
+
 // Get semester-wise pages (accessible to all authenticated users including viewers)
 router.get('/semester-pages', authOrGuest, async (req, res) => {
     try {
@@ -989,6 +1189,475 @@ router.delete('/batches/:batchName', auth, adminOnly, async (req, res) => {
     } catch (error) {
         console.error('Delete batch error:', error);
         res.status(500).json({ error: 'Failed to delete batch' });
+    }
+});
+
+// ============================================================================
+// SEMESTER SCHEDULE CRUD ROUTES (Manual Input for Semester-wise Viewer)
+// ============================================================================
+
+// @route   GET /api/schedule/semester/:pageNumber
+// @desc    Get all schedule entries for a specific semester page
+// @access  Public
+router.get('/semester/:pageNumber', authOrGuest, async (req, res) => {
+    try {
+        const { pageNumber } = req.params;
+        const { weekStartDate } = req.query; // Optional: specific week, defaults to template
+        const pageNum = parseInt(pageNumber, 10);
+
+        if (isNaN(pageNum)) {
+            return res.status(400).json({ error: 'Invalid page number' });
+        }
+
+        let schedules;
+
+        if (weekStartDate) {
+            // Fetch schedules for a specific week
+            const weekStart = new Date(weekStartDate);
+            
+            // Validate week range
+            if (!isWithinAllowedWeekRange(weekStart)) {
+                return res.status(400).json({ error: 'Week is outside allowed range (current week + 8 weeks)' });
+            }
+
+            // Get template schedules
+            const templates = await SemesterSchedule.find({ 
+                semesterPageNumber: pageNum,
+                isTemplate: true
+            });
+
+            // Get week-specific overrides
+            const overrides = await SemesterSchedule.find({ 
+                semesterPageNumber: pageNum,
+                isTemplate: false,
+                weekStartDate: weekStart
+            });
+
+            // Merge: overrides take priority over templates
+            const scheduleMap = new Map();
+            
+            // Add templates first
+            templates.forEach(t => {
+                const key = `${t.day}-${t.timeSlot.start}-${t.subSlotIndex || 0}`;
+                scheduleMap.set(key, t);
+            });
+
+            // Override with week-specific entries
+            overrides.forEach(o => {
+                const key = `${o.day}-${o.timeSlot.start}-${o.subSlotIndex || 0}`;
+                scheduleMap.set(key, o);
+            });
+
+            schedules = Array.from(scheduleMap.values())
+                .sort((a, b) => {
+                    const dayOrder = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                    const dayDiff = dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
+                    if (dayDiff !== 0) return dayDiff;
+                    return a.timeSlot.start.localeCompare(b.timeSlot.start);
+                });
+        } else {
+            // Fetch template schedules only
+            schedules = await SemesterSchedule.find({ 
+                semesterPageNumber: pageNum,
+                isTemplate: true
+            }).sort({ day: 1, 'timeSlot.start': 1 });
+        }
+
+        res.json({
+            success: true,
+            schedules,
+            weekStartDate: weekStartDate || null,
+            isTemplate: !weekStartDate
+        });
+    } catch (error) {
+        console.error('Get semester schedules error:', error);
+        res.status(500).json({ error: 'Failed to fetch semester schedules' });
+    }
+});
+
+// @route   POST /api/schedule/semester/:pageNumber
+// @desc    Create a new schedule entry for a semester page
+// @access  Private/CR/Admin
+router.post('/semester/:pageNumber', auth, async (req, res) => {
+    try {
+        const { pageNumber } = req.params;
+        const pageNum = parseInt(pageNumber, 10);
+
+        console.log('CREATE semester schedule - Page:', pageNum, 'Data:', req.body);
+
+        if (isNaN(pageNum)) {
+            return res.status(400).json({ error: 'Invalid page number' });
+        }
+
+        const { day, timeSlot, course, courseNickname, batch, teacher, weekStartDate, isTemplate, status, statusNote, roomNumber, subSlotIndex, totalSubSlots } = req.body;
+        const department = req.user.department;
+
+        if (!day || !timeSlot?.start || !timeSlot?.end) {
+            return res.status(400).json({
+                error: 'Missing required fields: day, timeSlot.start, timeSlot.end'
+            });
+        }
+
+        // Validate week range for weekly overrides
+        if (weekStartDate && !isTemplate) {
+            const weekStart = new Date(weekStartDate);
+            if (!isWithinAllowedWeekRange(weekStart)) {
+                return res.status(400).json({ error: 'Week is outside allowed range (current week + 8 weeks)' });
+            }
+        }
+
+        // Check if slot already exists
+        const queryConditions = {
+            semesterPageNumber: pageNum,
+            day,
+            'timeSlot.start': timeSlot.start,
+            subSlotIndex: subSlotIndex || 0
+        };
+
+        if (isTemplate || !weekStartDate) {
+            queryConditions.isTemplate = true;
+        } else {
+            queryConditions.isTemplate = false;
+            queryConditions.weekStartDate = new Date(weekStartDate);
+        }
+
+        const existing = await SemesterSchedule.findOne(queryConditions);
+
+        if (existing) {
+            return res.status(400).json({
+                error: 'A schedule already exists for this slot. Use update instead.'
+            });
+        }
+
+        const newSchedule = new SemesterSchedule({
+            semesterPageNumber: pageNum,
+            day,
+            timeSlot,
+            course: course || '',
+            courseNickname: courseNickname || '',
+            batch: batch || '',
+            teacher: teacher || '',
+            roomNumber: roomNumber || '',
+            department,
+            subSlotIndex: subSlotIndex || 0,
+            totalSubSlots: totalSubSlots || 1,
+            isTemplate: isTemplate !== false, // Default to template
+            weekStartDate: weekStartDate && !isTemplate ? new Date(weekStartDate) : null,
+            status: status || 'active',
+            statusNote: statusNote || '',
+            rawContent: `${course || ''} ${batch || ''}`.trim()
+        });
+
+        await newSchedule.save();
+
+        console.log('Semester schedule CREATED successfully:', { id: newSchedule._id, page: pageNum, course: newSchedule.course });
+
+        res.json({
+            success: true,
+            message: `Semester schedule entry created successfully ${!isTemplate && weekStartDate ? '(week-specific)' : '(template)'}`,
+            schedule: newSchedule
+        });
+    } catch (error) {
+        console.error('Semester schedule create error:', error);
+        res.status(500).json({ error: 'Failed to create semester schedule entry' });
+    }
+});
+
+// @route   PUT /api/schedule/semester/:id
+// @desc    Update an existing semester schedule entry
+// @access  Private/CR/Admin
+router.put('/semester/:id', auth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { course, courseNickname, batch, teacher, timeSlot, status, statusNote, roomNumber, currentWeekStartDate } = req.body;
+
+        console.log('UPDATE request:', { id, course, batch, roomNumber, currentWeekStartDate, isTemplate: req.body.isTemplate });
+
+        const schedule = await SemesterSchedule.findById(id);
+        if (!schedule) {
+            return res.status(404).json({ error: 'Schedule not found' });
+        }
+
+        console.log('Found schedule:', { 
+            id: schedule._id, 
+            isTemplate: schedule.isTemplate, 
+            subSlotIndex: schedule.subSlotIndex,
+            totalSubSlots: schedule.totalSubSlots,
+            currentCourse: schedule.course 
+        });
+
+        // If editing a template and currentWeekStartDate is provided, create a week-specific override
+        if (schedule.isTemplate && currentWeekStartDate) {
+            const weekStart = new Date(currentWeekStartDate);
+            
+            // Check if a week-specific override already exists
+            const existingOverride = await SemesterSchedule.findOne({
+                semesterPageNumber: schedule.semesterPageNumber,
+                day: schedule.day,
+                'timeSlot.start': schedule.timeSlot.start,
+                subSlotIndex: schedule.subSlotIndex || 0,
+                isTemplate: false,
+                weekStartDate: weekStart
+            });
+
+            if (existingOverride) {
+                // Update the existing override
+                if (course !== undefined) existingOverride.course = course;
+                if (courseNickname !== undefined) existingOverride.courseNickname = courseNickname;
+                if (batch !== undefined) existingOverride.batch = batch;
+                if (teacher !== undefined) existingOverride.teacher = teacher;
+                if (roomNumber !== undefined) existingOverride.roomNumber = roomNumber;
+                if (timeSlot?.end) existingOverride.timeSlot.end = timeSlot.end;
+                if (status !== undefined) existingOverride.status = status;
+                if (statusNote !== undefined) existingOverride.statusNote = statusNote;
+
+                existingOverride.rawContent = `${existingOverride.course || ''} ${existingOverride.batch || ''}`.trim();
+                await existingOverride.save();
+
+                return res.json({
+                    success: true,
+                    message: 'Week-specific schedule updated successfully',
+                    schedule: existingOverride
+                });
+            } else {
+                // Create a new week-specific override based on the template
+                const newOverride = new SemesterSchedule({
+                    semesterPageNumber: schedule.semesterPageNumber,
+                    day: schedule.day,
+                    timeSlot: {
+                        start: schedule.timeSlot.start,
+                        end: timeSlot?.end || schedule.timeSlot.end
+                    },
+                    course: course !== undefined ? course : schedule.course,
+                    courseNickname: courseNickname !== undefined ? courseNickname : schedule.courseNickname,
+                    batch: batch !== undefined ? batch : schedule.batch,
+                    teacher: teacher !== undefined ? teacher : schedule.teacher,
+                    roomNumber: roomNumber !== undefined ? roomNumber : schedule.roomNumber,
+                    department: schedule.department,
+                    subSlotIndex: schedule.subSlotIndex || 0,
+                    totalSubSlots: schedule.totalSubSlots || 1,
+                    isTemplate: false,
+                    weekStartDate: weekStart,
+                    status: status !== undefined ? status : 'active',
+                    statusNote: statusNote !== undefined ? statusNote : '',
+                    rawContent: `${course !== undefined ? course : schedule.course} ${batch !== undefined ? batch : schedule.batch}`.trim()
+                });
+
+                await newOverride.save();
+
+                return res.json({
+                    success: true,
+                    message: 'Week-specific schedule override created successfully',
+                    schedule: newOverride
+                });
+            }
+        }
+
+        // Normal update for non-template entries or template updates without week context
+        console.log('Updating schedule directly:', { course, batch, roomNumber });
+        if (course !== undefined) schedule.course = course;
+        if (courseNickname !== undefined) schedule.courseNickname = courseNickname;
+        if (batch !== undefined) schedule.batch = batch;
+        if (teacher !== undefined) schedule.teacher = teacher;
+        if (roomNumber !== undefined) schedule.roomNumber = roomNumber;
+        if (timeSlot?.end) schedule.timeSlot.end = timeSlot.end;
+        if (status !== undefined) schedule.status = status;
+        if (statusNote !== undefined) schedule.statusNote = statusNote;
+
+        schedule.rawContent = `${schedule.course || ''} ${schedule.batch || ''}`.trim();
+        schedule.needsReview = false;
+
+        await schedule.save();
+
+        console.log('Schedule saved successfully:', { id: schedule._id, course: schedule.course, batch: schedule.batch });
+
+        res.json({
+            success: true,
+            message: 'Semester schedule entry updated successfully',
+            schedule
+        });
+    } catch (error) {
+        console.error('Semester schedule update error:', error);
+        res.status(500).json({ error: 'Failed to update semester schedule entry' });
+    }
+});
+
+// @route   POST /api/schedule/semester/:pageNumber/split-slot
+// @desc    Split a time slot into sub-slots (2 or 4 divisions)
+// @access  Private/CR/Admin
+router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
+    try {
+        const { pageNumber } = req.params;
+        const pageNum = parseInt(pageNumber, 10);
+        const { day, timeSlot, newTotalSubSlots, weekStartDate, isTemplate } = req.body;
+
+        console.log('SPLIT-SLOT called:', { pageNum, day, timeSlot, newTotalSubSlots, isTemplate, weekStartDate });
+
+        if (![1, 2, 4].includes(newTotalSubSlots)) {
+            return res.status(400).json({ error: 'totalSubSlots must be 1, 2, or 4' });
+        }
+
+        // Find existing schedules for this slot
+        const queryConditions = {
+            semesterPageNumber: pageNum,
+            day,
+            'timeSlot.start': timeSlot.start
+        };
+
+        if (isTemplate || !weekStartDate) {
+            queryConditions.isTemplate = true;
+        } else {
+            queryConditions.isTemplate = false;
+            queryConditions.weekStartDate = new Date(weekStartDate);
+        }
+
+        const existingSchedules = await SemesterSchedule.find(queryConditions);
+        const department = req.user.department;
+
+        // Option A: If splitting from 1 slot with data, preserve data in first division
+        if (existingSchedules.length === 1 && (existingSchedules[0].totalSubSlots === 1 || !existingSchedules[0].totalSubSlots)) {
+            const existingData = existingSchedules[0];
+            
+            // If going from 1 to multiple (2 or 4), preserve data in subSlotIndex 0
+            if (newTotalSubSlots > 1 && existingData.course) {
+                // Update existing entry to be subSlot 0
+                existingData.subSlotIndex = 0;
+                existingData.totalSubSlots = newTotalSubSlots;
+                await existingData.save();
+
+                // Create empty sub-slots for remaining divisions
+                for (let i = 1; i < newTotalSubSlots; i++) {
+                    const newSubSlot = new SemesterSchedule({
+                        semesterPageNumber: pageNum,
+                        day,
+                        timeSlot,
+                        course: '',
+                        courseNickname: '',
+                        batch: '',
+                        teacher: '',
+                        roomNumber: '',
+                        department,
+                        subSlotIndex: i,
+                        totalSubSlots: newTotalSubSlots,
+                        isTemplate: isTemplate !== false,
+                        weekStartDate: weekStartDate && !isTemplate ? new Date(weekStartDate) : null,
+                        status: 'active',
+                        rawContent: ''
+                    });
+                    await newSubSlot.save();
+                }
+
+                return res.json({
+                    success: true,
+                    message: `Slot split into ${newTotalSubSlots} divisions. Existing data preserved in first division.`
+                });
+            } else if (newTotalSubSlots === 1) {
+                // Going back to single slot, just update totalSubSlots
+                existingData.totalSubSlots = 1;
+                existingData.subSlotIndex = 0;
+                await existingData.save();
+
+                return res.json({
+                    success: true,
+                    message: 'Slot merged to single division'
+                });
+            }
+        }
+
+        // Handle existing split slots (already has multiple sub-slots)
+        if (existingSchedules.length > 0) {
+            const currentTotal = existingSchedules[0].totalSubSlots || 1;
+            
+            if (newTotalSubSlots < currentTotal) {
+                // Delete sub-slots beyond the new total
+                await SemesterSchedule.deleteMany({
+                    ...queryConditions,
+                    subSlotIndex: { $gte: newTotalSubSlots }
+                });
+            }
+
+            // Update totalSubSlots for remaining entries
+            await SemesterSchedule.updateMany(
+                queryConditions,
+                { $set: { totalSubSlots: newTotalSubSlots } }
+            );
+
+            // Create missing sub-slots if going from smaller to larger
+            if (newTotalSubSlots > currentTotal) {
+                const existingIndexes = existingSchedules.map(s => s.subSlotIndex);
+                
+                for (let i = 0; i < newTotalSubSlots; i++) {
+                    if (!existingIndexes.includes(i)) {
+                        const newSubSlot = new SemesterSchedule({
+                            semesterPageNumber: pageNum,
+                            day,
+                            timeSlot,
+                            course: '',
+                            batch: '',
+                            teacher: '',
+                            department,
+                            subSlotIndex: i,
+                            totalSubSlots: newTotalSubSlots,
+                            isTemplate: isTemplate !== false,
+                            weekStartDate: weekStartDate && !isTemplate ? new Date(weekStartDate) : null,
+                            status: 'active',
+                            rawContent: ''
+                        });
+                        await newSubSlot.save();
+                    }
+                }
+            }
+        } else {
+            // No existing schedules, create empty sub-slots
+            for (let i = 0; i < newTotalSubSlots; i++) {
+                const newSubSlot = new Schedule({
+                    semesterPageNumber: pageNum,
+                    day,
+                    timeSlot,
+                    course: '',
+                    batch: '',
+                    teacher: '',
+                    department,
+                    subSlotIndex: i,
+                    totalSubSlots: newTotalSubSlots,
+                    isTemplate: isTemplate !== false,
+                    weekStartDate: weekStartDate && !isTemplate ? new Date(weekStartDate) : null,
+                    status: 'active',
+                    rawContent: ''
+                });
+                await newSubSlot.save();
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Slot split into ${newTotalSubSlots} division(s) successfully`
+        });
+    } catch (error) {
+        console.error('Split slot error:', error);
+        res.status(500).json({ error: 'Failed to split slot' });
+    }
+});
+
+// @route   DELETE /api/schedule/semester/:id
+// @desc    Delete a semester schedule entry
+// @access  Private/CR/Admin
+router.delete('/semester/:id', auth, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const schedule = await SemesterSchedule.findByIdAndDelete(id);
+        if (!schedule) {
+            return res.status(404).json({ error: 'Schedule not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Semester schedule entry deleted successfully'
+        });
+    } catch (error) {
+        console.error('Semester schedule delete error:', error);
+        res.status(500).json({ error: 'Failed to delete semester schedule entry' });
     }
 });
 

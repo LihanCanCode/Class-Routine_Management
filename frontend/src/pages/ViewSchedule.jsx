@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSchedules, createScheduleEntry, updateScheduleEntry, deleteScheduleEntry, getPDFInfo, getBatchList, getFilteredPDFUrl, getPDFUrl } from '../services/api';
-import { Filter, ChevronDown, ChevronRight, Clock, Users, BookOpen, Plus, X, Edit2, Trash2, Save, FileText, Calendar } from 'lucide-react';
+import { getSchedules, createScheduleEntry, updateScheduleEntry, deleteScheduleEntry, splitSlot, getPDFInfo, getBatchList, getFilteredPDFUrl, getPDFUrl } from '../services/api';
+import { Filter, ChevronDown, ChevronRight, Clock, Users, BookOpen, Plus, X, Edit2, Trash2, Save, FileText, Calendar, User } from 'lucide-react';
 import { useTutorial } from '../context/TutorialContext';
 
 const ViewSchedule = () => {
@@ -20,14 +20,21 @@ const ViewSchedule = () => {
     const [selectedSlot, setSelectedSlot] = useState(null);
     const [formData, setFormData] = useState({
         course: '',
+        courseNickname: '',
         batch: '',
         teacher: '',
         endTime: ''
     });
     const [saving, setSaving] = useState(false);
+    const [hoveredSlot, setHoveredSlot] = useState(null);
 
     // Batch options
-    const batchOptions = ['CSE 24', 'SWE 24', 'CSE 23', 'SWE 23', 'CSE 22', 'SWE 22', 'CSE 21', 'SWE 21', 'MSc(CSE)', 'All'];
+    const batchOptions = [
+        'CSE 24', 'SWE 24', 'CSE 23', 'SWE 23', 'CSE 22', 'SWE 22', 'CSE 21', 'SWE 21', 
+        'C1S1', 'C1S2', 'C2S1', 'C2S2', 'C3S1', 'C3S2', 'C4S1', 'C4S2',
+        'SW1', 'SW2', 'SW3', 'SW4',
+        'MSc(CSE)', 'All'
+    ];
 
     // Days and Time Slots for the grid
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
@@ -107,7 +114,8 @@ const ViewSchedule = () => {
         const exactMatch = schedules.find(s =>
             s.roomNumber === selectedRoom &&
             s.day === day &&
-            s.timeSlot.start === slotStart
+            s.timeSlot.start === slotStart &&
+            (s.subSlotIndex === 0 || !s.subSlotIndex) // Only return first sub-slot for merged view
         );
         
         if (exactMatch) return exactMatch;
@@ -117,17 +125,46 @@ const ViewSchedule = () => {
             s.roomNumber === selectedRoom &&
             s.day === day &&
             s.timeSlot.start < slotStart &&
-            s.timeSlot.end > slotStart
+            s.timeSlot.end > slotStart &&
+            (s.subSlotIndex === 0 || !s.subSlotIndex)
         );
     };
 
+    // Get all sub-slots for a specific time slot
+    const getSubSlotsForSlot = (day, slotStart) => {
+        return schedules.filter(s =>
+            s.roomNumber === selectedRoom &&
+            s.day === day &&
+            s.timeSlot.start === slotStart
+        ).sort((a, b) => (a.subSlotIndex || 0) - (b.subSlotIndex || 0));
+    };
+
+    // Get total sub-slots for a time slot
+    const getTotalSubSlots = (day, slotStart) => {
+        const subSlots = getSubSlotsForSlot(day, slotStart);
+        return subSlots.length > 0 ? (subSlots[0].totalSubSlots || 1) : 1;
+    };
+
+    // Handle split slot
+    const handleSplitSlot = async (day, slot) => {
+        try {
+            await splitSlot(selectedRoom, day, { start: slot.start, end: slot.end });
+            fetchSchedules();
+        } catch (err) {
+            console.error('Failed to split slot:', err);
+            setError(err.response?.data?.error || 'Failed to split slot');
+        }
+    };
+
     // Handle slot click - open modal
-    const handleSlotClick = (day, slot, schedule) => {
+    const handleSlotClick = (day, slot, schedule, subSlotIndex = 0, totalSubSlots = 1) => {
         setSelectedSlot({
             day,
             start: slot.start,
             end: slot.end,
-            label: slot.label
+            label: slot.label,
+            subSlotIndex,
+            totalSubSlots
         });
 
         if (schedule) {
@@ -136,6 +173,7 @@ const ViewSchedule = () => {
             setFormData({
                 id: schedule._id,
                 course: schedule.course || '',
+                courseNickname: schedule.courseNickname || '',
                 batch: schedule.batch || 'All',
                 teacher: schedule.teacher || '',
                 endTime: schedule.timeSlot.end
@@ -145,9 +183,11 @@ const ViewSchedule = () => {
             setModalMode('create');
             setFormData({
                 course: '',
+                courseNickname: '',
                 batch: 'All',
                 teacher: '',
-                endTime: slot.end
+                endTime: slot.end,
+                subSlotIndex
             });
         }
         setShowModal(true);
@@ -173,12 +213,15 @@ const ViewSchedule = () => {
                         end: formData.endTime || selectedSlot.end
                     },
                     course: formData.course,
+                    courseNickname: formData.courseNickname,
                     batch: formData.batch,
-                    teacher: formData.teacher
+                    teacher: formData.teacher,
+                    subSlotIndex: formData.subSlotIndex || 0
                 });
             } else {
                 await updateScheduleEntry(formData.id, {
                     course: formData.course,
+                    courseNickname: formData.courseNickname,
                     batch: formData.batch,
                     teacher: formData.teacher,
                     timeSlot: { end: formData.endTime }
@@ -310,68 +353,118 @@ const ViewSchedule = () => {
                                                     </td>
                                                 ) : null;
 
-                                                if (index <= skipUntilIndex) return breakGap; // Just potentially render break, skip slot
+                                                if (index <= skipUntilIndex) return breakGap;
 
                                                 const schedule = getScheduleForSlot(day, slot.start);
                                                 const colSpan = getColSpan(schedule, index);
 
-                                                // If bridging, updating skip index
                                                 if (colSpan > 1) {
                                                     skipUntilIndex = index + colSpan - 1;
                                                 }
+
+                                                // Get sub-slot data
+                                                const subSlots = getSubSlotsForSlot(day, slot.start);
+                                                const totalSubSlots = getTotalSubSlots(day, slot.start);
+                                                const isHovered = hoveredSlot?.day === day && hoveredSlot?.start === slot.start;
 
                                                 return (
                                                     <React.Fragment key={slot.start}>
                                                         {breakGap}
                                                         <td
                                                             colSpan={colSpan}
-                                                            className={`p-2 border-b border-r border-slate-100 h-32 align-top cursor-pointer hover:bg-slate-50 transition-colors ${colSpan > 1 ? 'z-20' : ''}`}
-                                                            onClick={() => handleSlotClick(day, slot, schedule)}
+                                                            className={`p-0 border-b border-r border-slate-100 h-32 align-top relative ${colSpan > 1 ? 'z-20' : ''}`}
+                                                            onMouseEnter={() => setHoveredSlot({ day, start: slot.start })}
+                                                            onMouseLeave={() => setHoveredSlot(null)}
                                                         >
-                                                            {schedule ? (
-                                                                <div className={`${schedule.needsReview ? 'bg-red-50 hover:bg-red-100 border-red-200' : 'bg-primary-50 hover:bg-primary-100 border-primary-100'} border rounded-lg p-3 h-full transition-all hover:shadow-md ${colSpan > 1 ? 'bg-indigo-50 border-indigo-100' : ''}`}>
-                                                                    {schedule.needsReview && (
-                                                                        <div className="flex items-center gap-1 mb-1">
-                                                                            <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded">
-                                                                                ⚠ NEEDS REVIEW
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Show course name, or fallback to rawContent if no course code */}
-                                                                    {(schedule.course || schedule.rawContent) && (
-                                                                        <div className="flex items-start gap-2 mb-2">
-                                                                            <BookOpen size={14} className={`${schedule.needsReview ? 'text-red-500' : 'text-primary-500'} mt-0.5 flex-shrink-0`} />
-                                                                            <span className={`font-bold ${schedule.needsReview ? 'text-red-900' : 'text-primary-900'} text-sm leading-tight`} title={schedule.rawContent}>
-                                                                                {schedule.course || schedule.rawContent?.slice(0, 50)}
-                                                                                {schedule.isBiWeekly && (
-                                                                                    <span className="ml-1 text-xs text-orange-600 font-normal">(bi-weekly)</span>
-                                                                                )}
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-
-                                                                    {schedule.batch && (
-                                                                        <div className="flex items-center gap-2 mb-1">
-                                                                            <Users size={14} className={schedule.needsReview ? 'text-red-400' : 'text-primary-400'} />
-                                                                            <span className={`text-xs font-semibold ${schedule.needsReview ? 'text-red-700 bg-red-200/50' : 'text-primary-700 bg-primary-200/50'} px-1.5 py-0.5 rounded`}>
-                                                                                {schedule.batch}
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-
-                                                                    {schedule.teacher && (
-                                                                        <p className="text-xs text-primary-600 mt-1 truncate" title={schedule.teacher}>
-                                                                            {schedule.teacher}
-                                                                        </p>
-                                                                    )}
-                                                                </div>
-                                                            ) : (
-                                                                <div className="h-full w-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                                                                    <span className="text-xs text-primary-500 font-medium flex items-center gap-1 bg-primary-50 px-2 py-1 rounded-full">
-                                                                        <Plus size={12} /> Add
-                                                                    </span>
-                                                                </div>
+                                                            {/* Split Control Icon (only for manual entries - no rawContent field) */}
+                                                            {isHovered && schedule && !schedule.rawContent && (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        handleSplitSlot(day, slot);
+                                                                    }}
+                                                                    className="absolute top-1 right-1 z-30 bg-white hover:bg-indigo-50 border border-indigo-200 rounded p-1 shadow-sm transition-colors"
+                                                                    title={`Split: ${totalSubSlots === 1 ? '1→2' : totalSubSlots === 2 ? '2→4' : '4→1'}`}
+                                                                >
+                                                                    <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                                                                    </svg>
+                                                                </button>
                                                             )}
+
+                                                            {/* Render sub-slots */}
+                                                            <div className="h-full flex flex-col">
+                                                                {Array.from({ length: totalSubSlots }).map((_, subIndex) => {
+                                                                    const subSlot = subSlots.find(s => (s.subSlotIndex || 0) === subIndex);
+                                                                    const hasContent = !!(subSlot && subSlot.course);
+
+                                                                    return (
+                                                                        <div
+                                                                            key={subIndex}
+                                                                            className={`flex-1 ${subIndex < totalSubSlots - 1 ? 'border-b border-slate-200' : ''} cursor-pointer hover:bg-slate-50 transition-colors`}
+                                                                            style={{ minHeight: totalSubSlots === 4 ? '32px' : totalSubSlots === 2 ? '64px' : '128px' }}
+                                                                            onClick={() => handleSlotClick(day, slot, subSlot, subIndex, totalSubSlots)}
+                                                                        >
+                                                                            {hasContent ? (
+                                                                                <div className={`${
+                                                                                    subSlot.needsReview 
+                                                                                        ? 'bg-red-50 hover:bg-red-100 border-red-200' 
+                                                                                        : colSpan > 1 
+                                                                                        ? 'bg-indigo-50 hover:bg-indigo-100 border-indigo-100'
+                                                                                        : 'bg-primary-50 hover:bg-primary-100 border-primary-100'
+                                                                                } border rounded-lg p-2 h-full m-1 transition-all hover:shadow-md`}>
+                                                                                    {subSlot.needsReview && (
+                                                                                        <div className="flex items-center gap-1 mb-1">
+                                                                                            <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded">
+                                                                                                ⚠ REVIEW
+                                                                                            </span>
+                                                                                        </div>
+                                                                                                    )}
+                                                                                    {(subSlot.course || subSlot.rawContent) && (
+                                                                                        <div className="flex items-start gap-1 mb-1">
+                                                                                            <BookOpen size={totalSubSlots === 4 ? 12 : 14} className={`${subSlot.needsReview ? 'text-red-500' : 'text-primary-500'} mt-0.5 flex-shrink-0`} />
+                                                                                            <div className="flex-1 min-w-0 flex justify-between items-start gap-1">
+                                                                                                <span className={`font-bold ${subSlot.needsReview ? 'text-red-900' : 'text-primary-900'} ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'} leading-tight truncate`} title={subSlot.courseNickname || subSlot.course || subSlot.rawContent}>
+                                                                                                    {subSlot.courseNickname || subSlot.course || subSlot.rawContent?.slice(0, 30)}
+                                                                                                </span>
+                                                                                                {subSlot.roomNumber && (
+                                                                                                    <span className={`${totalSubSlots === 4 ? 'text-[10px]' : 'text-xs'} text-primary-600 font-semibold flex-shrink-0`}>
+                                                                                                        {subSlot.roomNumber}
+                                                                                                    </span>
+                                                                                                )}
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    )}
+
+                                                                                    {subSlot.batch && (
+                                                                                        <div className="flex items-center gap-1 mb-1">
+                                                                                            <Users size={totalSubSlots === 4 ? 10 : 12} className={subSlot.needsReview ? 'text-red-400' : 'text-primary-400'} />
+                                                                                            <span className={`${totalSubSlots === 4 ? 'text-[10px]' : 'text-xs'} font-semibold ${subSlot.needsReview ? 'text-red-700 bg-red-200/50' : 'text-primary-700 bg-primary-200/50'} px-1.5 py-0.5 rounded`}>
+                                                                                                {subSlot.batch}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    )}
+
+                                                                                    {subSlot.teacher && (
+                                                                                        <div className="flex items-center gap-1 mt-1">
+                                                                                            <User size={totalSubSlots === 4 ? 10 : 12} className={subSlot.needsReview ? 'text-red-400' : 'text-primary-400'} />
+                                                                                            <p className={`${totalSubSlots === 4 ? 'text-[10px]' : 'text-xs'} text-primary-600 truncate`} title={subSlot.teacher}>
+                                                                                                {subSlot.teacher}
+                                                                                            </p>
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                            ) : (
+                                                                                <div className="h-full w-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                                                                                    <span className={`${totalSubSlots === 4 ? 'text-[10px]' : 'text-xs'} text-primary-500 font-medium flex items-center gap-1 bg-primary-50 px-2 py-1 rounded-full`}>
+                                                                                        <Plus size={totalSubSlots === 4 ? 10 : 12} /> Add
+                                                                                    </span>
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
                                                         </td>
                                                     </React.Fragment>
                                                 );
@@ -388,8 +481,8 @@ const ViewSchedule = () => {
             {/* Manual Entry Modal */}
             {showModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full animate-fade-in">
-                        <div className="p-6 border-b border-slate-100">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full max-h-[90vh] flex flex-col animate-fade-in">
+                        <div className="p-6 border-b border-slate-100 flex-shrink-0">
                             <div className="flex items-center justify-between">
                                 <h2 className="text-xl font-bold text-slate-800">
                                     {modalMode === 'create' ? 'Add Schedule Entry' : 'Edit Schedule Entry'}
@@ -406,7 +499,7 @@ const ViewSchedule = () => {
                             </p>
                         </div>
 
-                        <div className="p-6 space-y-4">
+                        <div className="p-6 space-y-4 overflow-y-auto flex-1">
                             {error && (
                                 <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
                                     {error}
@@ -424,6 +517,22 @@ const ViewSchedule = () => {
                                     placeholder="e.g., CSE 4307 or Programming Training"
                                     className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                                 />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Course Nickname (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formData.courseNickname}
+                                    onChange={(e) => setFormData({ ...formData, courseNickname: e.target.value })}
+                                    placeholder="Short name to display in schedule"
+                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                />
+                                <p className="text-xs text-slate-400 mt-1">
+                                    Short name to display in schedule. Start typing to see suggestions.
+                                </p>
                             </div>
 
                             <div>
@@ -485,7 +594,7 @@ const ViewSchedule = () => {
                             </div>
                         </div>
 
-                        <div className="p-6 border-t border-slate-100 flex items-center justify-between gap-3">
+                        <div className="p-6 border-t border-slate-100 flex items-center justify-between gap-3 flex-shrink-0">
                             {modalMode === 'edit' && (
                                 <button
                                     onClick={handleDelete}
