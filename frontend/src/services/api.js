@@ -9,7 +9,7 @@ API.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem('token');
         const guestMode = localStorage.getItem('guestMode');
-        
+
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         } else if (guestMode === 'true') {
@@ -29,7 +29,7 @@ API.interceptors.response.use(
     (error) => {
         if (error.response?.status === 401) {
             const guestMode = localStorage.getItem('guestMode');
-            
+
             // Only redirect if not in guest mode
             if (guestMode !== 'true') {
                 localStorage.removeItem('token');
@@ -66,6 +66,10 @@ export const checkAvailability = async (date, startTime, endTime) => {
 
 export const createBooking = async (bookingData) => {
     return await API.post('/booking', bookingData);
+};
+
+export const deleteBooking = async (id) => {
+    return await API.delete(`/booking/${id}`);
 };
 
 export const getBookings = async (filters = {}) => {
@@ -178,7 +182,7 @@ export const getSemesterPages = async () => {
 export const getSemesterPageUrl = (pageNumber) => {
     const token = localStorage.getItem('token');
     const guestMode = localStorage.getItem('guestMode');
-    
+
     if (guestMode === 'true') {
         return `http://localhost:5000/api/schedule/semester-page/${pageNumber}?guestMode=true`;
     }

@@ -259,10 +259,59 @@ router.get('/availability', async (req, res) => {
             ]
         });
 
+        // Get the start of the week for the selected date
+        const weekStart = getWeekStartDate(selectedDate);
+
+        // Fetch only week-specific overrides for this week (templates are ignored for availability search)
+        const semesterScheds = await SemesterSchedule.find({
+            day: dayOfWeek,
+            isTemplate: false,
+            weekStartDate: weekStart,
+            $or: [
+                {
+                    'timeSlot.start': { $lte: startTime },
+                    'timeSlot.end': { $gt: startTime }
+                },
+                {
+                    'timeSlot.start': { $lt: endTime },
+                    'timeSlot.end': { $gte: endTime }
+                },
+                {
+                    'timeSlot.start': { $gte: startTime },
+                    'timeSlot.end': { $lte: endTime }
+                }
+            ]
+        });
+
+        // Rooms can have multiple sub-slots, we care if ANY active sub-slot occupies the room
+        const activeSemesterRooms = new Set();
+        const roomEntries = {}; // room -> slotKey -> entry
+
+        semesterScheds.forEach(s => {
+            const roomNum = s.roomNumber.trim();
+            if (!roomNum) return;
+
+            if (!roomEntries[roomNum]) roomEntries[roomNum] = {};
+            const slotKey = `${s.timeSlot.start}_${s.subSlotIndex || 0}`;
+
+            // Overrides (isTemplate: false) take priority
+            roomEntries[roomNum][slotKey] = s;
+        });
+
+        // Now check which rooms are actually occupied
+        Object.keys(roomEntries).forEach(roomNum => {
+            const slots = roomEntries[roomNum];
+            const hasActiveSlot = Object.values(slots).some(entry => entry.status === 'active');
+            if (hasActiveSlot) {
+                activeSemesterRooms.add(roomNum);
+            }
+        });
+
         // Find occupied rooms
         const occupiedRoomNumbers = new Set([
             ...schedules.map(s => s.roomNumber.trim()),
-            ...bookings.map(b => b.roomNumber.trim())
+            ...bookings.map(b => b.roomNumber.trim()),
+            ...Array.from(activeSemesterRooms)
         ]);
 
         // Categorize rooms
@@ -273,26 +322,52 @@ router.get('/availability', async (req, res) => {
 
         // Use Maps to de-duplicate by roomNumber
         const scheduleMap = new Map();
-        schedules.forEach(s => {
-            if (!scheduleMap.has(s.roomNumber)) {
-                scheduleMap.set(s.roomNumber, {
-                    roomNumber: s.roomNumber,
-                    course: s.course,
-                    batch: s.batch,
-                    reason: 'scheduled_class'
+        const bookingMap = new Map();
+
+        // 1. Process Manual Semester Schedules (Resolving Overrides) - HIGH PRIORITY
+        Object.keys(roomEntries).forEach(roomNum => {
+            const slots = roomEntries[roomNum];
+            const activeEntry = Object.values(slots).find(entry => entry.status === 'active');
+
+            if (activeEntry) {
+                const roomTrimmed = roomNum.trim();
+                // Anything manual from schedule page --> "Student Booking" (Orange Card)
+                bookingMap.set(roomTrimmed, {
+                    roomNumber: roomTrimmed,
+                    batch: activeEntry.batch,
+                    purpose: activeEntry.course || 'Private Booking',
+                    bookedBy: activeEntry.teacher || 'CR/Admin',
+                    reason: 'booked',
+                    bookingId: activeEntry.bookingId || 'manual-routine'
                 });
             }
         });
 
-        const bookingMap = new Map();
+        // 2. Add regular bookings (overwrites/complements manual ones)
         bookings.forEach(b => {
-            if (!bookingMap.has(b.roomNumber)) {
-                bookingMap.set(b.roomNumber, {
-                    roomNumber: b.roomNumber,
+            const roomNum = b.roomNumber.trim();
+            if (!bookingMap.has(roomNum)) {
+                bookingMap.set(roomNum, {
+                    roomNumber: roomNum,
                     batch: b.batch,
                     purpose: b.purpose,
                     bookedBy: b.bookedBy?.name,
-                    reason: 'booked'
+                    reason: 'booked',
+                    bookingId: b._id
+                });
+            }
+        });
+
+        // 3. Add original static schedules (PDF source) - LOW PRIORITY
+        schedules.forEach(s => {
+            const roomNum = s.roomNumber.trim();
+            // ONLY show as Gray Class if not already appearing as Orange Booking
+            if (!bookingMap.has(roomNum)) {
+                scheduleMap.set(roomNum, {
+                    roomNumber: roomNum,
+                    course: s.course,
+                    batch: s.batch,
+                    reason: 'scheduled_class'
                 });
             }
         });
@@ -425,7 +500,7 @@ router.put('/manual/:id', auth, adminOnly, async (req, res) => {
         if (timeSlot?.end) schedule.timeSlot.end = timeSlot.end;
 
         schedule.rawContent = `${schedule.course || ''} ${schedule.batch || ''}`.trim();
-        
+
         // Clear needsReview flag when admin updates the schedule
         schedule.needsReview = false;
 
@@ -529,7 +604,7 @@ router.post('/split-slot', auth, adminOnly, async (req, res) => {
             // Split into 2 or 4 sub-slots
             for (let i = 0; i < newTotalSubSlots; i++) {
                 const existingData = existingSlots.find(slot => slot.subSlotIndex === i);
-                
+
                 const newSlot = new Schedule({
                     roomNumber,
                     day,
@@ -587,7 +662,7 @@ router.post('/upload-pdf', auth, adminOnly, upload.single('schedule'), async (re
             // Delete cached filtered PDFs
             const cacheDir = path.join(__dirname, '../uploads/cache');
             if (fs.existsSync(cacheDir)) {
-                const cacheFiles = fs.readdirSync(cacheDir).filter(f => 
+                const cacheFiles = fs.readdirSync(cacheDir).filter(f =>
                     f.startsWith(`${type}-${department}-`)
                 );
                 cacheFiles.forEach(f => fs.unlinkSync(path.join(cacheDir, f)));
@@ -601,18 +676,18 @@ router.post('/upload-pdf', auth, adminOnly, upload.single('schedule'), async (re
         // Split semester-wise PDF into individual pages
         if (type === 'semester-wise') {
             console.log('Splitting semester-wise PDF into individual pages...');
-            
+
             // Load the PDF
             const pdfBytes = fs.readFileSync(pdfPath);
             const pdfDoc = await PDFDocument.load(pdfBytes);
             totalPages = pdfDoc.getPageCount();
-            
+
             // Create pages directory if it doesn't exist
             const pagesDir = path.join(__dirname, '..', 'uploads', 'pages');
             if (!fs.existsSync(pagesDir)) {
                 fs.mkdirSync(pagesDir, { recursive: true });
             }
-            
+
             // Delete old page files for this department
             const oldPagePattern = new RegExp(`^semester-wise-${department}-\\d+\\.pdf$`);
             const existingFiles = fs.readdirSync(pagesDir);
@@ -621,22 +696,22 @@ router.post('/upload-pdf', auth, adminOnly, upload.single('schedule'), async (re
                     fs.unlinkSync(path.join(pagesDir, file));
                 }
             });
-            
+
             // Parse page mapping to extract batch info
             const parsedData = await parseSemesterPDF(pdfPath);
             const extractedPageMapping = parsedData.pageMapping;
-            
+
             // Split and save each page
             for (let i = 0; i < totalPages; i++) {
                 const newPdf = await PDFDocument.create();
                 const [copiedPage] = await newPdf.copyPages(pdfDoc, [i]);
                 newPdf.addPage(copiedPage);
                 const pdfBytesPage = await newPdf.save();
-                
+
                 const pageFileName = `semester-wise-${department}-${i + 1}.pdf`;
                 const pageFilePath = path.join(pagesDir, pageFileName);
                 fs.writeFileSync(pageFilePath, pdfBytesPage);
-                
+
                 // Merge with existing page mapping data
                 const existingPageData = extractedPageMapping.find(p => p.pageNumber === i + 1) || {};
                 pageMapping.push({
@@ -649,7 +724,7 @@ router.post('/upload-pdf', auth, adminOnly, upload.single('schedule'), async (re
                     pageFilePath: `pages/${pageFileName}`
                 });
             }
-            
+
             console.log(`Split PDF into ${totalPages} individual pages`);
         }
 
@@ -676,8 +751,8 @@ router.post('/upload-pdf', auth, adminOnly, upload.single('schedule'), async (re
                 totalPages,
                 uploadedAt: pdfDoc.createdAt,
                 pagesCreated: pageMapping.length,
-                batchesFound: type === 'semester-wise' 
-                    ? [...new Set(pageMapping.map(p => p.fullText).filter(Boolean))].length 
+                batchesFound: type === 'semester-wise'
+                    ? [...new Set(pageMapping.map(p => p.fullText).filter(Boolean))].length
                     : 0
             }
         });
@@ -710,7 +785,7 @@ router.get('/pdf/:type', auth, async (req, res) => {
         // Send PDF file
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="${pdfDoc.originalName}"`);
-        
+
         const fileStream = fs.createReadStream(pdfDoc.filePath);
         fileStream.pipe(res);
 
@@ -765,7 +840,7 @@ router.get('/pdf-batches/:type', auth, async (req, res) => {
 
         // Extract unique fullText values (e.g., "BSc CSE 1st-Section 1")
         const batchMap = new Map();
-        
+
         pdfDoc.pageMapping.forEach(page => {
             if (page.fullText) {
                 const key = page.fullText;
@@ -846,8 +921,8 @@ router.get('/pdf/:type/filtered', auth, async (req, res) => {
             .map(page => page.pageNumber);
 
         if (filteredPages.length === 0) {
-            return res.status(404).json({ 
-                error: 'No pages found for the specified filter' 
+            return res.status(404).json({
+                error: 'No pages found for the specified filter'
             });
         }
 
@@ -892,14 +967,14 @@ router.get('/course-nicknames', auth, async (req, res) => {
         const roomWiseNicknames = await Schedule.distinct('courseNickname', {
             courseNickname: { $exists: true, $ne: '' }
         });
-        
+
         const semesterNicknames = await SemesterSchedule.distinct('courseNickname', {
             courseNickname: { $exists: true, $ne: '' }
         });
-        
+
         // Combine and remove duplicates
         const allNicknames = [...new Set([...roomWiseNicknames, ...semesterNicknames])];
-        
+
         res.json({
             success: true,
             nicknames: allNicknames.sort()
@@ -914,12 +989,12 @@ router.get('/course-nicknames', auth, async (req, res) => {
 router.get('/semester-pages', authOrGuest, async (req, res) => {
     try {
         let query = { type: 'semester-wise' };
-        
+
         // If user has a department, filter by it; otherwise show first available
         if (req.user.department) {
             query.department = req.user.department;
         }
-        
+
         // Get the semester-wise PDF document
         const pdfDoc = await SchedulePDF.findOne(query);
 
@@ -948,14 +1023,14 @@ router.get('/semester-pages', authOrGuest, async (req, res) => {
 router.get('/semester-page/:pageNumber', authOrGuest, async (req, res) => {
     try {
         let query = { type: 'semester-wise' };
-        
+
         // If user has a department, filter by it; otherwise show first available
         if (req.user.department) {
             query.department = req.user.department;
         }
-        
+
         const pageNumber = parseInt(req.params.pageNumber);
-        
+
         // Get the semester-wise PDF document
         const pdfDoc = await SchedulePDF.findOne(query);
 
@@ -971,7 +1046,7 @@ router.get('/semester-page/:pageNumber', authOrGuest, async (req, res) => {
 
         // Construct full path to page file
         const pagePath = path.join(__dirname, '..', 'uploads', pageData.pageFilePath);
-        
+
         if (!fs.existsSync(pagePath)) {
             return res.status(404).json({ error: 'Page file not found on disk' });
         }
@@ -998,9 +1073,9 @@ router.put('/semester-page/:pageNumber', auth, adminOnly, async (req, res) => {
             return res.status(400).json({ error: 'Batch name is required' });
         }
 
-        const pdfDoc = await SchedulePDF.findOne({ 
-            type: 'semester-wise', 
-            department 
+        const pdfDoc = await SchedulePDF.findOne({
+            type: 'semester-wise',
+            department
         });
 
         if (!pdfDoc) {
@@ -1016,8 +1091,8 @@ router.put('/semester-page/:pageNumber', auth, adminOnly, async (req, res) => {
         pdfDoc.pageMapping[pageIndex].fullText = batchName.trim();
         await pdfDoc.save();
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: 'Batch name updated successfully',
             page: pdfDoc.pageMapping[pageIndex]
         });
@@ -1033,9 +1108,9 @@ router.delete('/semester-page/:pageNumber', auth, adminOnly, async (req, res) =>
         const department = req.user.department;
         const pageNumber = parseInt(req.params.pageNumber);
 
-        const pdfDoc = await SchedulePDF.findOne({ 
-            type: 'semester-wise', 
-            department 
+        const pdfDoc = await SchedulePDF.findOne({
+            type: 'semester-wise',
+            department
         });
 
         if (!pdfDoc) {
@@ -1063,8 +1138,8 @@ router.delete('/semester-page/:pageNumber', auth, adminOnly, async (req, res) =>
         pdfDoc.totalPages = pdfDoc.pageMapping.length;
         await pdfDoc.save();
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: 'Page deleted successfully',
             totalPages: pdfDoc.totalPages
         });
@@ -1080,13 +1155,13 @@ router.delete('/semester-page/:pageNumber', auth, adminOnly, async (req, res) =>
 router.delete('/clear-all', auth, adminOnly, async (req, res) => {
     try {
         // Delete all schedules except DEMO-101
-        const result = await Schedule.deleteMany({ 
-            roomNumber: { $ne: 'DEMO-101' } 
+        const result = await Schedule.deleteMany({
+            roomNumber: { $ne: 'DEMO-101' }
         });
 
         // Delete all rooms except DEMO-101
-        const roomResult = await Room.deleteMany({ 
-            roomNumber: { $ne: 'DEMO-101' } 
+        const roomResult = await Room.deleteMany({
+            roomNumber: { $ne: 'DEMO-101' }
         });
 
         // Delete all bookings
@@ -1117,7 +1192,7 @@ router.delete('/clear-all', auth, adminOnly, async (req, res) => {
 router.get('/batches', async (req, res) => {
     try {
         const batches = await Schedule.distinct('batch');
-        
+
         // Filter out empty or invalid batches and sort
         const validBatches = batches
             .filter(batch => batch && batch.trim() !== '')
@@ -1215,28 +1290,28 @@ router.get('/semester/:pageNumber', authOrGuest, async (req, res) => {
         if (weekStartDate) {
             // Fetch schedules for a specific week
             const weekStart = new Date(weekStartDate);
-            
+
             // Validate week range
             if (!isWithinAllowedWeekRange(weekStart)) {
                 return res.status(400).json({ error: 'Week is outside allowed range (current week + 8 weeks)' });
             }
 
             // Get template schedules
-            const templates = await SemesterSchedule.find({ 
+            const templates = await SemesterSchedule.find({
                 semesterPageNumber: pageNum,
                 isTemplate: true
-            });
+            }).populate('bookingId');
 
             // Get week-specific overrides
-            const overrides = await SemesterSchedule.find({ 
+            const overrides = await SemesterSchedule.find({
                 semesterPageNumber: pageNum,
                 isTemplate: false,
                 weekStartDate: weekStart
-            });
+            }).populate('bookingId');
 
             // Merge: overrides take priority over templates
             const scheduleMap = new Map();
-            
+
             // Add templates first
             templates.forEach(t => {
                 const key = `${t.day}-${t.timeSlot.start}-${t.subSlotIndex || 0}`;
@@ -1258,7 +1333,7 @@ router.get('/semester/:pageNumber', authOrGuest, async (req, res) => {
                 });
         } else {
             // Fetch template schedules only
-            schedules = await SemesterSchedule.find({ 
+            schedules = await SemesterSchedule.find({
                 semesterPageNumber: pageNum,
                 isTemplate: true
             }).sort({ day: 1, 'timeSlot.start': 1 });
@@ -1347,6 +1422,7 @@ router.post('/semester/:pageNumber', auth, async (req, res) => {
             weekStartDate: weekStartDate && !isTemplate ? new Date(weekStartDate) : null,
             status: status || 'active',
             statusNote: statusNote || '',
+            bookingId: req.body.bookingId || null,
             rawContent: `${course || ''} ${batch || ''}`.trim()
         });
 
@@ -1380,18 +1456,18 @@ router.put('/semester/:id', auth, async (req, res) => {
             return res.status(404).json({ error: 'Schedule not found' });
         }
 
-        console.log('Found schedule:', { 
-            id: schedule._id, 
-            isTemplate: schedule.isTemplate, 
+        console.log('Found schedule:', {
+            id: schedule._id,
+            isTemplate: schedule.isTemplate,
             subSlotIndex: schedule.subSlotIndex,
             totalSubSlots: schedule.totalSubSlots,
-            currentCourse: schedule.course 
+            currentCourse: schedule.course
         });
 
         // If editing a template and currentWeekStartDate is provided, create a week-specific override
         if (schedule.isTemplate && currentWeekStartDate) {
             const weekStart = new Date(currentWeekStartDate);
-            
+
             // Check if a week-specific override already exists
             const existingOverride = await SemesterSchedule.findOne({
                 semesterPageNumber: schedule.semesterPageNumber,
@@ -1413,6 +1489,7 @@ router.put('/semester/:id', auth, async (req, res) => {
                 if (timeSlot?.end) existingOverride.timeSlot.end = timeSlot.end;
                 if (status !== undefined) existingOverride.status = status;
                 if (statusNote !== undefined) existingOverride.statusNote = statusNote;
+                if (req.body.bookingId !== undefined) existingOverride.bookingId = req.body.bookingId;
 
                 existingOverride.rawContent = `${existingOverride.course || ''} ${existingOverride.batch || ''}`.trim();
                 await existingOverride.save();
@@ -1444,6 +1521,7 @@ router.put('/semester/:id', auth, async (req, res) => {
                     weekStartDate: weekStart,
                     status: status !== undefined ? status : 'active',
                     statusNote: statusNote !== undefined ? statusNote : '',
+                    bookingId: req.body.bookingId !== undefined ? req.body.bookingId : schedule.bookingId,
                     rawContent: `${course !== undefined ? course : schedule.course} ${batch !== undefined ? batch : schedule.batch}`.trim()
                 });
 
@@ -1468,6 +1546,7 @@ router.put('/semester/:id', auth, async (req, res) => {
         if (timeSlot?.end) schedule.timeSlot.end = timeSlot.end;
         if (status !== undefined) schedule.status = status;
         if (statusNote !== undefined) schedule.statusNote = statusNote;
+        if (req.body.bookingId !== undefined) schedule.bookingId = req.body.bookingId;
 
         schedule.rawContent = `${schedule.course || ''} ${schedule.batch || ''}`.trim();
         schedule.needsReview = false;
@@ -1522,7 +1601,7 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
         // Option A: If splitting from 1 slot with data, preserve data in first division
         if (existingSchedules.length === 1 && (existingSchedules[0].totalSubSlots === 1 || !existingSchedules[0].totalSubSlots)) {
             const existingData = existingSchedules[0];
-            
+
             // If going from 1 to multiple (2 or 4), preserve data in subSlotIndex 0
             if (newTotalSubSlots > 1) {
                 // Update existing entry to be subSlot 0 (preserve data if any)
@@ -1573,7 +1652,7 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
         // Handle existing split slots (already has multiple sub-slots)
         if (existingSchedules.length > 0) {
             const currentTotal = existingSchedules[0].totalSubSlots || 1;
-            
+
             if (newTotalSubSlots < currentTotal) {
                 // Delete sub-slots beyond the new total
                 await SemesterSchedule.deleteMany({
@@ -1591,7 +1670,7 @@ router.post('/semester/:pageNumber/split-slot', auth, async (req, res) => {
             // Create missing sub-slots if going from smaller to larger
             if (newTotalSubSlots > currentTotal) {
                 const existingIndexes = existingSchedules.map(s => s.subSlotIndex);
-                
+
                 for (let i = 0; i < newTotalSubSlots; i++) {
                     if (!existingIndexes.includes(i)) {
                         const newSubSlot = new SemesterSchedule({

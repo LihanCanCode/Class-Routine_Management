@@ -81,6 +81,11 @@ const semesterScheduleSchema = new mongoose.Schema({
     rawContent: {
         type: String,
         default: ''
+    },
+    bookingId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Booking',
+        default: null
     }
 }, {
     timestamps: true,

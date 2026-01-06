@@ -1,24 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { getSemesterPages, getSemesterPageUrl, updateSemesterPageBatchName, deleteSemesterPage, getSemesterSchedule, createSemesterEntry, updateSemesterEntry, deleteSemesterEntry, getRooms, getCoursesByBatch, getCourseNicknames, splitSemesterSlot } from '../services/api';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { getSemesterPages, getSemesterPageUrl, updateSemesterPageBatchName, deleteSemesterPage, getSemesterSchedule, createSemesterEntry, updateSemesterEntry, deleteSemesterEntry, getRooms, getCoursesByBatch, getCourseNicknames, splitSemesterSlot, createBooking, deleteBooking } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { FileText, Calendar, ChevronLeft, ChevronRight, Edit2, Save, X, Trash2, Plus, Download, Clock, BookOpen, Users, DoorOpen, User } from 'lucide-react';
+import { FileText, Calendar, ChevronLeft, ChevronRight, Edit2, Save, X, Trash2, Plus, Download, Clock, BookOpen, Users, DoorOpen, User, Info, Globe } from 'lucide-react';
 
 const ViewSemesterSchedule = () => {
     const { user } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [pages, setPages] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedPage, setSelectedPage] = useState(1);
+    const [selectedPage, setSelectedPage] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        return parseInt(params.get('pageNumber')) || 1;
+    });
     const [totalPages, setTotalPages] = useState(0);
     const [exists, setExists] = useState(false);
     const [error, setError] = useState('');
     const [editingPage, setEditingPage] = useState(null);
     const [editValue, setEditValue] = useState('');
     const [saving, setSaving] = useState(false);
-    
+
     // Week navigation state
-    const [weekOffset, setWeekOffset] = useState(user?.role === 'admin' || user?.role === 'cr' ? 0 : 1); // 0 = base template (admin/CR only), 1 = this week, etc.
+    const [weekOffset, setWeekOffset] = useState(() => {
+        const params = new URLSearchParams(window.location.search);
+        const urlOffset = params.get('weekOffset');
+        if (urlOffset !== null) return parseInt(urlOffset);
+        return user?.role === 'admin' || user?.role === 'cr' ? 0 : 1;
+    });
     const [currentWeekStart, setCurrentWeekStart] = useState(null);
-    
+
     // Schedule grid state
     const [schedules, setSchedules] = useState([]);
     const [loadingSchedules, setLoadingSchedules] = useState(false);
@@ -35,26 +46,32 @@ const ViewSemesterSchedule = () => {
         roomNumber: '',
         endTime: '',
         status: 'active',
-        statusNote: ''
+        statusNote: '',
+        roomAlreadyBooked: false,
+        bookingId: null,
+        pendingBookingAction: null
     });
-    
+
     // Rooms state
     const [rooms, setRooms] = useState([]);
     const [loadingRooms, setLoadingRooms] = useState(false);
-    
+
     // Courses state
     const [courses, setCourses] = useState([]);
     const [loadingCourses, setLoadingCourses] = useState(false);
-    
+
     // Course nicknames state
     const [courseNicknames, setCourseNicknames] = useState([]);
-    
+
     // Hover state for split control
     const [hoveredSlot, setHoveredSlot] = useState(null); // { day, start }
-    
+
+    // Pending booking return state
+    const [pendingBookingReturn, setPendingBookingReturn] = useState(null);
+
     // Batch selection options
     const batchOptions = ['CSE 24', 'SWE 24', 'CSE 23', 'SWE 23', 'CSE 22', 'SWE 22', 'CSE 21', 'SWE 21'];
-    
+
     const isAdmin = user?.role === 'admin' || user?.role === 'super-admin';
     const isCR = user?.role === 'cr';
     const canEdit = isAdmin || isCR;
@@ -93,17 +110,17 @@ const ViewSemesterSchedule = () => {
         if (offset === 0) {
             return 'Base Template';
         }
-        
+
         const weekStart = getWeekStartDate(offset - 1);
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 6);
-        
+
         const formatDate = (date) => {
             const month = date.toLocaleString('default', { month: 'short' });
             const day = date.getDate();
             return `${month} ${day}`;
         };
-        
+
         if (offset === 1) {
             return `This Week (${formatDate(weekStart)} - ${formatDate(weekEnd)})`;
         }
@@ -120,7 +137,50 @@ const ViewSemesterSchedule = () => {
         if (selectedPage && exists) {
             fetchSchedules();
         }
-    }, [selectedPage, weekOffset]);
+    }, [selectedPage, weekOffset, exists]);
+
+    useEffect(() => {
+        if (pendingBookingReturn && !loadingSchedules && exists) {
+            const { bookedRoom, returnDay, returnSlot, returnSubSlot, returnMode, returnEndTime, pendingBookingAction, savedFormData, savedBatch } = pendingBookingReturn;
+
+            const slot = timeSlots.find(s => s.start === returnSlot);
+            if (slot) {
+                // Open modal first with minimal setup
+                setSelectedSlot({
+                    day: returnDay,
+                    start: slot.start,
+                    end: slot.end,
+                    label: slot.label,
+                    subSlotIndex: parseInt(returnSubSlot) || 0,
+                    totalSubSlots: 1
+                });
+                setModalMode(returnMode || 'create');
+
+                // Restore form data with booked room, saved batch, and returned end time
+                const { _pageNumber, _weekOffset, _savedBatch, ...cleanFormData } = savedFormData;
+                setFormData({
+                    ...cleanFormData,
+                    batch: savedBatch,
+                    roomNumber: bookedRoom,
+                    endTime: returnEndTime || cleanFormData.endTime || slot.end,
+                    roomAlreadyBooked: true,
+                    pendingBookingAction: pendingBookingAction,
+                    privateBooking: weekOffset !== 0 // Flag for UI note
+                });
+
+                // Fetch courses for the batch selection if it exists
+                if (cleanFormData.batchSelection) {
+                    fetchCourses(cleanFormData.batchSelection);
+                }
+
+                setShowModal(true);
+
+                // Clear localStorage and pending state
+                localStorage.removeItem('semesterScheduleFormData');
+                setPendingBookingReturn(null);
+            }
+        }
+    }, [pendingBookingReturn, loadingSchedules, schedules]);
 
     const fetchSchedules = async () => {
         try {
@@ -191,11 +251,15 @@ const ViewSemesterSchedule = () => {
             setTotalPages(response.data.totalPages);
             setExists(response.data.exists);
             if (response.data.totalPages > 0) {
-                setSelectedPage(1);
-                // Fetch schedules immediately after setting page
-                if (response.data.exists) {
-                    setTimeout(() => fetchSchedules(), 0);
-                }
+                // Preserve current selectedPage if it's valid, otherwise default to 1
+                const currentParams = new URLSearchParams(window.location.search);
+                const urlPage = parseInt(currentParams.get('pageNumber'));
+
+                setSelectedPage(prev => {
+                    if (urlPage && urlPage <= response.data.totalPages) return urlPage;
+                    if (prev > 1 && prev <= response.data.totalPages) return prev;
+                    return 1;
+                });
             }
             setLoading(false);
         } catch (err) {
@@ -235,14 +299,14 @@ const ViewSemesterSchedule = () => {
         try {
             setSaving(true);
             await updateSemesterPageBatchName(pageNumber, editValue);
-            
+
             // Update local state
-            setPages(pages.map(p => 
-                p.pageNumber === pageNumber 
+            setPages(pages.map(p =>
+                p.pageNumber === pageNumber
                     ? { ...p, fullText: editValue.trim() }
                     : p
             ));
-            
+
             setEditingPage(null);
             setEditValue('');
             setError('');
@@ -266,10 +330,10 @@ const ViewSemesterSchedule = () => {
         try {
             setLoading(true);
             await deleteSemesterPage(pageNumber);
-            
+
             // Refresh pages
             await fetchPages();
-            
+
             // Adjust selected page if necessary
             if (selectedPage === pageNumber && totalPages > 1) {
                 setSelectedPage(Math.min(selectedPage, totalPages - 1));
@@ -280,6 +344,65 @@ const ViewSemesterSchedule = () => {
         }
     };
 
+    // Helper: Calculate actual date for a day in the current week
+    const calculateDateForSlot = (day, weekOffsetValue = weekOffset) => {
+        const weekStart = getWeekStartDate(weekOffsetValue >= 1 ? weekOffsetValue - 1 : 0);
+        const dayMap = { 'Sunday': 0, 'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4, 'Friday': 5, 'Saturday': 6 };
+        const targetDate = new Date(weekStart);
+        targetDate.setDate(targetDate.getDate() + dayMap[day]);
+
+        // Return YYYY-MM-DD in LOCAL time to avoid timezone shift issues with toISOString()
+        const year = targetDate.getFullYear();
+        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const date = String(targetDate.getDate()).padStart(2, '0');
+        return `${year}-${month}-${date}`;
+    };
+
+    // Helper: Handle return from room booking
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const bookedRoom = params.get('bookedRoom');
+        const returnDay = params.get('day');
+        const returnSlot = params.get('slot');
+        const returnSubSlot = params.get('subSlot');
+        const returnEndTime = params.get('endTime');
+        const returnMode = params.get('mode');
+        const pendingBookingAction = params.get('pendingBookingAction');
+
+        if (bookedRoom && returnDay && returnSlot) {
+            // Restore saved form data from localStorage
+            const savedFormData = localStorage.getItem('semesterScheduleFormData');
+
+            if (savedFormData) {
+                const restoredData = JSON.parse(savedFormData);
+
+                // Restore page and week first
+                if (restoredData._pageNumber && restoredData._pageNumber !== selectedPage) {
+                    setSelectedPage(restoredData._pageNumber);
+                }
+                if (restoredData._weekOffset !== undefined && restoredData._weekOffset !== weekOffset) {
+                    setWeekOffset(restoredData._weekOffset);
+                }
+
+                // Store pending return to process after schedules load
+                setPendingBookingReturn({
+                    bookedRoom,
+                    returnDay,
+                    returnSlot,
+                    returnSubSlot,
+                    returnMode,
+                    returnEndTime,
+                    pendingBookingAction,
+                    savedFormData: restoredData,
+                    savedBatch: restoredData._savedBatch || getCurrentPageInfo()
+                });
+            }
+
+            // Clean up URL
+            navigate(location.pathname, { replace: true });
+        }
+    }, [location.search]);
+
     // Schedule Grid Helper Functions
     const getScheduleForSlot = (day, slotStart, slotEnd) => {
         const exactMatch = schedules.find(s =>
@@ -287,9 +410,9 @@ const ViewSemesterSchedule = () => {
             s.day === day &&
             s.timeSlot.start === slotStart
         );
-        
+
         if (exactMatch) return exactMatch;
-        
+
         return schedules.find(s =>
             s.semesterPageNumber === selectedPage &&
             s.day === day &&
@@ -305,7 +428,7 @@ const ViewSemesterSchedule = () => {
             s.day === day &&
             s.timeSlot.start === slotStart
         );
-        
+
         // Sort by subSlotIndex
         return subSlots.sort((a, b) => (a.subSlotIndex || 0) - (b.subSlotIndex || 0));
     };
@@ -320,9 +443,9 @@ const ViewSemesterSchedule = () => {
     const handleSplitSlot = async (day, slot) => {
         const currentTotal = getTotalSubSlots(day, slot.start);
         const nextTotal = currentTotal === 1 ? 2 : currentTotal === 2 ? 4 : 1;
-        
+
         console.log(`Splitting slot ${day} ${slot.start}: ${currentTotal} → ${nextTotal}`);
-        
+
         try {
             const response = await splitSemesterSlot(selectedPage, {
                 day,
@@ -331,9 +454,9 @@ const ViewSemesterSchedule = () => {
                 isTemplate: weekOffset === 0,
                 weekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
             });
-            
+
             console.log('Split response:', response.data);
-            
+
             await fetchSchedules();
         } catch (err) {
             console.error('Failed to split slot:', err);
@@ -374,7 +497,7 @@ const ViewSemesterSchedule = () => {
         });
 
         const currentBatch = getCurrentPageInfo(); // Pre-fill with page batch name
-        
+
         // Auto-detect batch selection based on user role
         let defaultBatchSelection = '';
         if (isCR && user?.batch) {
@@ -397,10 +520,12 @@ const ViewSemesterSchedule = () => {
                 batch: schedule.batch || currentBatch,
                 batchSelection: editBatchSelection,
                 teacher: schedule.teacher || '',
-                roomNumber: schedule.roomNumber || '',
                 endTime: schedule.timeSlot.end,
                 status: schedule.status || 'active',
-                statusNote: schedule.statusNote || ''
+                statusNote: schedule.statusNote || '',
+                roomAlreadyBooked: !!(schedule.roomNumber),
+                bookingId: schedule.bookingId || null,
+                pendingBookingAction: null
             });
             // Fetch courses for the batch selection
             fetchCourses(editBatchSelection);
@@ -417,7 +542,10 @@ const ViewSemesterSchedule = () => {
                 roomNumber: '',
                 endTime: slot.end,
                 status: 'active',
-                statusNote: ''
+                statusNote: '',
+                roomAlreadyBooked: false,
+                bookingId: null,
+                pendingBookingAction: null
             });
             // Fetch courses for default batch selection
             fetchCourses(defaultBatchSelection);
@@ -428,9 +556,14 @@ const ViewSemesterSchedule = () => {
     // Save schedule entry
     const handleSave = async () => {
         console.log('handleSave called - modalMode:', modalMode, 'formData.id:', formData.id);
-        
+
         if (!formData.course.trim()) {
             setError('Course name is required');
+            return;
+        }
+
+        if (!formData.roomAlreadyBooked && !formData.roomNumber) {
+            setError('Please book a room or check "Room Already Booked" to manually select');
             return;
         }
 
@@ -438,6 +571,48 @@ const ViewSemesterSchedule = () => {
         setError('');
 
         try {
+            let currentBookingId = formData.bookingId;
+
+            // 1. Handle Room Booking Synchronization
+            if (formData.pendingBookingAction === 'create' && formData.roomNumber) {
+                if (weekOffset === 0) {
+                    console.log('Template entry: Room will be occupied via recurring routine, no specific booking doc needed.');
+                    currentBookingId = null;
+                } else {
+                    console.log('Finalizing room booking for specific week...');
+                    try {
+                        const bookingResponse = await createBooking({
+                            roomNumber: formData.roomNumber,
+                            date: calculateDateForSlot(selectedSlot.day),
+                            timeSlot: {
+                                start: selectedSlot.start,
+                                end: formData.endTime || selectedSlot.end
+                            },
+                            batch: formData.batch,
+                            purpose: formData.course
+                        });
+                        currentBookingId = bookingResponse.data.booking._id;
+                        console.log('Room booking confirmed:', currentBookingId);
+                    } catch (bookingErr) {
+                        console.error('Failed to create room booking:', bookingErr);
+                        setError('Room booking failed: ' + (bookingErr.response?.data?.error || bookingErr.message));
+                        setSaving(false);
+                        return;
+                    }
+                }
+            } else if (modalMode === 'edit' && formData.status === 'cancelled' && formData.bookingId) {
+                // Automatically cancel booking if class is cancelled
+                console.log('Class cancelled - cancelling associated room booking:', formData.bookingId);
+                try {
+                    await deleteBooking(formData.bookingId);
+                    currentBookingId = null; // Unlink after cancellation
+                } catch (cancelErr) {
+                    console.error('Failed to cancel associated booking:', cancelErr);
+                    // Continue anyway, just log it
+                }
+            }
+
+            // 2. Save Schedule Entry
             if (modalMode === 'create') {
                 const scheduleData = {
                     day: selectedSlot.day,
@@ -450,15 +625,16 @@ const ViewSemesterSchedule = () => {
                     section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
-                    roomNumber: formData.roomNumber,
+                    roomNumber: weekOffset === 0 ? formData.roomNumber : '', // Only save room for Base Template
                     status: formData.status,
                     statusNote: formData.statusNote,
                     subSlotIndex: selectedSlot.subSlotIndex || 0,
                     totalSubSlots: selectedSlot.totalSubSlots || 1,
-                    isTemplate: weekOffset === 0, // Template if base, override if specific week
-                    weekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
+                    isTemplate: weekOffset === 0,
+                    weekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null,
+                    bookingId: currentBookingId
                 };
-                
+
                 console.log('Creating schedule entry:', scheduleData);
                 await createSemesterEntry(selectedPage, scheduleData);
             } else {
@@ -468,18 +644,19 @@ const ViewSemesterSchedule = () => {
                     section: formData.section,
                     batch: formData.batch,
                     teacher: formData.teacher,
-                    roomNumber: formData.roomNumber,
+                    roomNumber: weekOffset === 0 ? formData.roomNumber : '',
                     status: formData.status,
                     statusNote: formData.statusNote,
                     timeSlot: { end: formData.endTime },
-                    currentWeekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null
+                    currentWeekStartDate: weekOffset >= 1 ? getWeekStartDate(weekOffset - 1).toISOString() : null,
+                    bookingId: currentBookingId
                 });
             }
 
             setShowModal(false);
             console.log('Entry saved, refreshing schedules...');
             await fetchSchedules();
-            
+
             // Refresh course nicknames if a new nickname was added
             if (formData.courseNickname && formData.courseNickname.trim()) {
                 fetchCourseNicknames();
@@ -494,18 +671,25 @@ const ViewSemesterSchedule = () => {
     // Delete schedule entry
     const handleDelete = async () => {
         if (!formData.id) return;
-        
-        if (!window.confirm('Are you sure you want to delete this schedule entry?')) {
-            return;
-        }
+        if (!window.confirm('Are you sure you want to delete this entry?')) return;
 
         setSaving(true);
         try {
+            // Delete associated room booking if it exists
+            if (formData.bookingId) {
+                console.log('Deleting entry - cancelling associated room booking:', formData.bookingId);
+                try {
+                    await deleteBooking(formData.bookingId);
+                } catch (bookingErr) {
+                    console.error('Failed to cancel associated booking during deletion:', bookingErr);
+                }
+            }
+
             await deleteSemesterEntry(formData.id);
             setShowModal(false);
             fetchSchedules();
         } catch (err) {
-            setError(err.response?.data?.error || 'Failed to delete schedule');
+            setError('Failed to delete schedule entry');
         } finally {
             setSaving(false);
         }
@@ -564,11 +748,10 @@ const ViewSemesterSchedule = () => {
                                 <button
                                     onClick={handlePrevPage}
                                     disabled={selectedPage === 1}
-                                    className={`p-2 rounded-lg transition-all ${
-                                        selectedPage === 1
-                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                            : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
-                                    }`}
+                                    className={`p-2 rounded-lg transition-all ${selectedPage === 1
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
+                                        }`}
                                 >
                                     <ChevronLeft size={20} />
                                 </button>
@@ -578,11 +761,10 @@ const ViewSemesterSchedule = () => {
                                 <button
                                     onClick={handleNextPage}
                                     disabled={selectedPage === totalPages}
-                                    className={`p-2 rounded-lg transition-all ${
-                                        selectedPage === totalPages
-                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                            : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
-                                    }`}
+                                    className={`p-2 rounded-lg transition-all ${selectedPage === totalPages
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
+                                        }`}
                                 >
                                     <ChevronRight size={20} />
                                 </button>
@@ -596,7 +778,7 @@ const ViewSemesterSchedule = () => {
                                 const displayLabel = pageData?.fullText || `Page ${pageNum}`;
                                 const isLongLabel = displayLabel.length > 20;
                                 const isEditing = editingPage === pageNum;
-                                
+
                                 return (
                                     <div key={pageNum} className="relative group">
                                         {isEditing ? (
@@ -632,20 +814,18 @@ const ViewSemesterSchedule = () => {
                                             <>
                                                 <button
                                                     onClick={() => setSelectedPage(pageNum)}
-                                                    className={`px-3 py-2 rounded-lg font-medium transition-all text-sm ${
-                                                        selectedPage === pageNum
-                                                            ? 'bg-gradient-to-r from-primary-600 to-secondary-600 text-white shadow-lg'
-                                                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                                    } ${isLongLabel ? 'max-w-[200px]' : ''}`}
+                                                    className={`px-3 py-2 rounded-lg font-medium transition-all text-sm ${selectedPage === pageNum
+                                                        ? 'bg-gradient-to-r from-primary-600 to-secondary-600 text-white shadow-lg'
+                                                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                                        } ${isLongLabel ? 'max-w-[200px]' : ''}`}
                                                     title={`${displayLabel} (Page ${pageNum})`}
                                                 >
                                                     <div className="flex flex-col items-start">
                                                         <span className={isLongLabel ? 'truncate w-full' : ''}>
                                                             {displayLabel}
                                                         </span>
-                                                        <span className={`text-xs ${
-                                                            selectedPage === pageNum ? 'text-white/80' : 'text-slate-500'
-                                                        }`}>
+                                                        <span className={`text-xs ${selectedPage === pageNum ? 'text-white/80' : 'text-slate-500'
+                                                            }`}>
                                                             p.{pageNum}
                                                         </span>
                                                     </div>
@@ -716,22 +896,20 @@ const ViewSemesterSchedule = () => {
                                 <button
                                     onClick={() => setWeekOffset(Math.max(user?.role === 'admin' || user?.role === 'cr' ? 0 : 1, weekOffset - 1))}
                                     disabled={weekOffset === 0 || (weekOffset === 1 && user?.role !== 'admin' && user?.role !== 'cr')}
-                                    className={`px-3 py-1.5 rounded-lg transition-all text-sm font-medium ${
-                                        weekOffset === 0 || (weekOffset === 1 && user?.role !== 'admin' && user?.role !== 'cr')
-                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                            : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
-                                    }`}
+                                    className={`px-3 py-1.5 rounded-lg transition-all text-sm font-medium ${weekOffset === 0 || (weekOffset === 1 && user?.role !== 'admin' && user?.role !== 'cr')
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
+                                        }`}
                                 >
                                     ← Previous Week
                                 </button>
                                 <button
                                     onClick={() => setWeekOffset(Math.min(8, weekOffset + 1))}
                                     disabled={weekOffset === 8}
-                                    className={`px-3 py-1.5 rounded-lg transition-all text-sm font-medium ${
-                                        weekOffset === 8
-                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                            : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
-                                    }`}
+                                    className={`px-3 py-1.5 rounded-lg transition-all text-sm font-medium ${weekOffset === 8
+                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
+                                        }`}
                                 >
                                     Next Week →
                                 </button>
@@ -878,73 +1056,65 @@ const ViewSemesterSchedule = () => {
                                                                                     onClick={() => canEdit && handleSlotClick(day, slot, subSlot, subIndex, totalSubSlots)}
                                                                                 >
                                                                                     {hasContent ? (
-                                                                                        <div className={`border rounded-lg p-2 h-full m-1 transition-all ${canEdit ? 'hover:shadow-md' : ''} ${
-                                                                                            subSlot.status === 'cancelled' 
-                                                                                                ? 'bg-red-50 hover:bg-red-100 border-red-200' 
-                                                                                                : subSlot.status === 'rescheduled'
+                                                                                        <div className={`border rounded-lg p-2 h-full m-1 transition-all ${canEdit ? 'hover:shadow-md' : ''} ${subSlot.status === 'cancelled'
+                                                                                            ? 'bg-red-50 hover:bg-red-100 border-red-200'
+                                                                                            : subSlot.status === 'rescheduled'
                                                                                                 ? 'bg-amber-50 hover:bg-amber-100 border-amber-200'
-                                                                                                : colSpan > 1 
-                                                                                                ? 'bg-indigo-50 hover:bg-indigo-100 border-indigo-100'
-                                                                                                : 'bg-primary-50 hover:bg-primary-100 border-primary-100'
-                                                                                        }`}>
+                                                                                                : colSpan > 1
+                                                                                                    ? 'bg-indigo-50 hover:bg-indigo-100 border-indigo-100'
+                                                                                                    : 'bg-primary-50 hover:bg-primary-100 border-primary-100'
+                                                                                            }`}>
                                                                                             {(subSlot.status === 'cancelled' || subSlot.status === 'rescheduled') && (
                                                                                                 <div className="flex items-center gap-1 mb-1">
-                                                                                                    <span className={`text-xs font-bold px-1 py-0.5 rounded ${
-                                                                                                        subSlot.status === 'cancelled' 
-                                                                                                            ? 'bg-red-200 text-red-800' 
-                                                                                                            : 'bg-amber-200 text-amber-800'
-                                                                                                    }`}>
+                                                                                                    <span className={`text-xs font-bold px-1 py-0.5 rounded ${subSlot.status === 'cancelled'
+                                                                                                        ? 'bg-red-200 text-red-800'
+                                                                                                        : 'bg-amber-200 text-amber-800'
+                                                                                                        }`}>
                                                                                                         {subSlot.status === 'cancelled' ? '✗ CANCELLED' : '⟲ RESCHEDULED'}
                                                                                                     </span>
                                                                                                 </div>
                                                                                             )}
                                                                                             {subSlot.course && (
                                                                                                 <div className="flex items-start gap-1 mb-1">
-                                                                                                    <BookOpen size={totalSubSlots === 4 ? 10 : 12} className={`mt-0.5 flex-shrink-0 ${
-                                                                                                        subSlot.status === 'cancelled' ? 'text-red-500' :
+                                                                                                    <BookOpen size={totalSubSlots === 4 ? 10 : 12} className={`mt-0.5 flex-shrink-0 ${subSlot.status === 'cancelled' ? 'text-red-500' :
                                                                                                         subSlot.status === 'rescheduled' ? 'text-amber-500' :
-                                                                                                        'text-primary-500'
-                                                                                                    }`} />
+                                                                                                            'text-primary-500'
+                                                                                                        }`} />
                                                                                                     <div className="flex-1 min-w-0">
                                                                                                         <div className="flex items-center justify-between gap-1">
                                                                                                             <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                                                                                                <span className={`font-bold leading-tight truncate ${
-                                                                                                                    totalSubSlots === 4 ? 'text-xs' : 'text-sm'
-                                                                                                                } ${
-                                                                                                                    subSlot.status === 'cancelled' ? 'text-red-900 line-through' :
-                                                                                                                    subSlot.status === 'rescheduled' ? 'text-amber-900' :
-                                                                                                                    'text-primary-900'
-                                                                                                                }`} title={subSlot.course}>
+                                                                                                                <span className={`font-bold leading-tight truncate ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'
+                                                                                                                    } ${subSlot.status === 'cancelled' ? 'text-red-900 line-through' :
+                                                                                                                        subSlot.status === 'rescheduled' ? 'text-amber-900' :
+                                                                                                                            'text-primary-900'
+                                                                                                                    }`} title={subSlot.course}>
                                                                                                                     {subSlot.course}
                                                                                                                 </span>
                                                                                                                 {subSlot.section && (
-                                                                                                                    <span className={`font-medium leading-tight flex-shrink-0 ${
-                                                                                                                        totalSubSlots === 4 ? 'text-xs' : 'text-sm'
-                                                                                                                    } ${
-                                                                                                                        subSlot.status === 'cancelled' ? 'text-red-700 line-through' :
-                                                                                                                        subSlot.status === 'rescheduled' ? 'text-amber-700' :
-                                                                                                                        'text-primary-700'
-                                                                                                                    }`} title={subSlot.section}>
+                                                                                                                    <span className={`font-medium leading-tight flex-shrink-0 ${totalSubSlots === 4 ? 'text-xs' : 'text-sm'
+                                                                                                                        } ${subSlot.status === 'cancelled' ? 'text-red-700 line-through' :
+                                                                                                                            subSlot.status === 'rescheduled' ? 'text-amber-700' :
+                                                                                                                                'text-primary-700'
+                                                                                                                        }`} title={subSlot.section}>
                                                                                                                         | {subSlot.section}
                                                                                                                     </span>
                                                                                                                 )}
                                                                                                             </div>
-                                                                                                            {subSlot.roomNumber && (
-                                                                                                                <span className={`text-xs font-medium flex-shrink-0 ${
-                                                                                                                    subSlot.status === 'cancelled' ? 'text-red-600' :
+                                                                                                            {(subSlot.roomNumber || (subSlot.bookingId && subSlot.bookingId.roomNumber)) && (
+                                                                                                                <span className={`text-xs font-medium flex-shrink-0 flex items-center gap-1 ${subSlot.status === 'cancelled' ? 'text-red-600' :
                                                                                                                     subSlot.status === 'rescheduled' ? 'text-amber-600' :
-                                                                                                                    'text-primary-600'
-                                                                                                                }`} title={subSlot.roomNumber}>
-                                                                                                                    {subSlot.roomNumber}
+                                                                                                                        'text-primary-600'
+                                                                                                                    }`} title={(subSlot.roomNumber || subSlot.bookingId?.roomNumber) + (subSlot.bookingId ? ' (Week-specific booking)' : '')}>
+                                                                                                                    {subSlot.bookingId && <Globe size={10} className="text-indigo-500" />}
+                                                                                                                    {subSlot.roomNumber || subSlot.bookingId?.roomNumber}
                                                                                                                 </span>
                                                                                                             )}
                                                                                                         </div>
                                                                                                         {subSlot.courseNickname && totalSubSlots <= 2 && (
-                                                                                                            <p className={`text-xs italic mt-0.5 truncate ${
-                                                                                                                subSlot.status === 'cancelled' ? 'text-red-600' :
+                                                                                                            <p className={`text-xs italic mt-0.5 truncate ${subSlot.status === 'cancelled' ? 'text-red-600' :
                                                                                                                 subSlot.status === 'rescheduled' ? 'text-amber-600' :
-                                                                                                                'text-primary-600'
-                                                                                                            }`} title={subSlot.courseNickname}>
+                                                                                                                    'text-primary-600'
+                                                                                                                }`} title={subSlot.courseNickname}>
                                                                                                                 "{subSlot.courseNickname}"
                                                                                                             </p>
                                                                                                         )}
@@ -954,16 +1124,14 @@ const ViewSemesterSchedule = () => {
 
                                                                                             {subSlot.teacher && totalSubSlots <= 2 && (
                                                                                                 <div className="flex items-center gap-1 mb-1">
-                                                                                                    <User size={10} className={`${
-                                                                                                        subSlot.status === 'cancelled' ? 'text-red-400' :
+                                                                                                    <User size={10} className={`${subSlot.status === 'cancelled' ? 'text-red-400' :
                                                                                                         subSlot.status === 'rescheduled' ? 'text-amber-400' :
-                                                                                                        'text-primary-400'
-                                                                                                    }`} />
-                                                                                                    <span className={`text-xs font-medium truncate ${
-                                                                                                        subSlot.status === 'cancelled' ? 'text-red-600' :
+                                                                                                            'text-primary-400'
+                                                                                                        }`} />
+                                                                                                    <span className={`text-xs font-medium truncate ${subSlot.status === 'cancelled' ? 'text-red-600' :
                                                                                                         subSlot.status === 'rescheduled' ? 'text-amber-600' :
-                                                                                                        'text-primary-600'
-                                                                                                    }`} title={subSlot.teacher}>
+                                                                                                            'text-primary-600'
+                                                                                                        }`} title={subSlot.teacher}>
                                                                                                         {subSlot.teacher}
                                                                                                     </span>
                                                                                                 </div>
@@ -1043,7 +1211,7 @@ const ViewSemesterSchedule = () => {
                                 <h2 className="text-xl font-bold text-slate-800">
                                     {modalMode === 'create' ? 'Add Schedule Entry' : 'Edit Schedule Entry'}
                                 </h2>
-                                <button 
+                                <button
                                     onClick={() => setShowModal(false)}
                                     className="text-slate-400 hover:text-slate-600 transition-colors"
                                 >
@@ -1051,7 +1219,7 @@ const ViewSemesterSchedule = () => {
                                 </button>
                             </div>
                             <p className="text-sm text-slate-500 mt-1">
-                                {selectedSlot?.day} • {selectedSlot?.label} • {getCurrentPageInfo()}
+                                {selectedSlot?.day} • {selectedSlot?.label} • {formData.batch || getCurrentPageInfo()}
                                 {selectedSlot?.totalSubSlots > 1 && (
                                     <span className="ml-2 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
                                         Division {(selectedSlot.subSlotIndex || 0) + 1}/{selectedSlot.totalSubSlots}
@@ -1198,23 +1366,74 @@ const ViewSemesterSchedule = () => {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">
-                                    Room Number *
+                                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={formData.roomAlreadyBooked}
+                                        onChange={(e) => setFormData({ ...formData, roomAlreadyBooked: e.target.checked, roomNumber: e.target.checked ? formData.roomNumber : '' })}
+                                        className="w-4 h-4 text-primary-600 border-slate-300 rounded focus:ring-primary-500"
+                                    />
+                                    Room Already Booked
                                 </label>
-                                <select
-                                    value={formData.roomNumber}
-                                    onChange={(e) => setFormData({ ...formData, roomNumber: e.target.value })}
-                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                                    required
-                                >
-                                    <option value="">Select a room...</option>
-                                    {rooms.map(room => (
-                                        <option key={room} value={room}>{room}</option>
-                                    ))}
-                                </select>
-                                <p className="text-xs text-slate-400 mt-1">
-                                    Rooms from room-wise routine
-                                </p>
+
+                                {formData.roomAlreadyBooked ? (
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                                            Room Number *
+                                        </label>
+                                        <select
+                                            value={formData.roomNumber}
+                                            onChange={(e) => setFormData({ ...formData, roomNumber: e.target.value })}
+                                            className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                            required
+                                        >
+                                            <option value="">Select a room...</option>
+                                            {rooms.map(room => (
+                                                <option key={room} value={room}>{room}</option>
+                                            ))}
+                                        </select>
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            Manually select from available rooms
+                                        </p>
+                                        {formData.privateBooking && weekOffset !== 0 && (
+                                            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                                                <div className="flex items-center gap-2 text-blue-700 font-medium text-xs">
+                                                    <Info size={14} />
+                                                    <span>This room will be privately booked for this week only.</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                // Save current form data with page, week, and batch info to localStorage
+                                                const currentBatch = getCurrentPageInfo();
+                                                localStorage.setItem('semesterScheduleFormData', JSON.stringify({
+                                                    ...formData,
+                                                    _pageNumber: selectedPage,
+                                                    _weekOffset: weekOffset,
+                                                    _savedBatch: currentBatch
+                                                }));
+
+                                                const slotDate = calculateDateForSlot(selectedSlot.day);
+                                                const startTime = selectedSlot.start;
+                                                const endTime = formData.endTime || selectedSlot.end;
+                                                const returnUrl = `/view-semester?pageNumber=${selectedPage}&weekOffset=${weekOffset}&day=${selectedSlot.day}&slot=${selectedSlot.start}&subSlot=${selectedSlot.subSlotIndex}&mode=${modalMode}`;
+                                                navigate(`/book?date=${slotDate}&startTime=${startTime}&endTime=${endTime}&returnTo=semester&returnUrl=${encodeURIComponent(returnUrl)}`);
+                                            }}
+                                            className="w-full px-4 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium flex items-center justify-center gap-2"
+                                        >
+                                            <DoorOpen size={18} />
+                                            Book Room for This Slot
+                                        </button>
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            Date: {calculateDateForSlot(selectedSlot?.day || 'Monday')} • Time: {selectedSlot?.start || '08:00'}
+                                        </p>
+                                    </div>
+                                )}
                             </div>
 
                             <div>

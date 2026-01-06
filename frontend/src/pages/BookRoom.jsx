@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
 import { checkAvailability, createBooking, getBatches } from '../services/api';
@@ -9,8 +10,11 @@ import { useTutorial } from '../context/TutorialContext';
 const BookRoom = () => {
     const { user } = useAuth();
     const { hideDemoRoom } = useTutorial();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [date, setDate] = useState(new Date());
     const [selectedSlot, setSelectedSlot] = useState(null);
+
     const [availability, setAvailability] = useState(null);
     const [loading, setLoading] = useState(false);
 
@@ -25,6 +29,9 @@ const BookRoom = () => {
     // Dynamic batches from database
     const [batches, setBatches] = useState(['CSE 21', 'CSE 22', 'CSE 23', 'CSE 24', 'MSc(CSE)']); // Default fallback
 
+    // End time state for range search
+    const [endTime, setEndTime] = useState('');
+
     const timeSlots = [
         { start: '08:00', end: '09:15', label: '8:00 AM - 9:15 AM' },
         { start: '09:15', end: '10:30', label: '9:15 AM - 10:30 AM' },
@@ -32,6 +39,15 @@ const BookRoom = () => {
         { start: '11:45', end: '13:00', label: '11:45 AM - 1:00 PM' },
         { start: '14:30', end: '15:45', label: '2:30 PM - 3:45 PM' },
         { start: '15:45', end: '17:00', label: '3:45 PM - 5:00 PM' },
+    ];
+
+    const endTimes = [
+        { value: '09:15', label: '9:15 AM' },
+        { value: '10:30', label: '10:30 AM' },
+        { value: '11:45', label: '11:45 AM' },
+        { value: '13:00', label: '1:00 PM' },
+        { value: '15:45', label: '3:45 PM' },
+        { value: '17:00', label: '5:00 PM' },
     ];
 
     // Fetch batches from database
@@ -44,32 +60,60 @@ const BookRoom = () => {
                 }
             } catch (error) {
                 console.error('Failed to fetch batches:', error);
-                // Keep default batches as fallback
             }
         };
         fetchBatches();
     }, []);
 
+    // Helper to format date as YYYY-MM-DD in local time
+    const formatLocalDate = (d) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const date = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${date}`;
+    };
+
+    // Handle URL parameters for auto-fill from semester schedule
     useEffect(() => {
-        if (date && selectedSlot) {
+        const params = new URLSearchParams(location.search);
+        const urlDate = params.get('date');
+        const urlStartTime = params.get('startTime');
+        const urlEndTime = params.get('endTime');
+
+        if (urlDate) {
+            // Parse YYYY-MM-DD as local date by adding time part
+            setDate(new Date(urlDate + 'T00:00:00'));
+        }
+
+        if (urlStartTime) {
+            const slot = timeSlots.find(s => s.start === urlStartTime);
+            if (slot) {
+                setSelectedSlot(slot);
+                // Default end time to this slot's end, unless provided in URL
+                setEndTime(urlEndTime || slot.end);
+            }
+        }
+    }, [location.search]);
+
+    useEffect(() => {
+        if (date && selectedSlot && endTime) {
             fetchAvailability();
         } else {
             setAvailability(null);
         }
-    }, [date, selectedSlot]);
+    }, [date, selectedSlot, endTime]);
 
     const fetchAvailability = async () => {
         setLoading(true);
         try {
-            const formattedDate = date.toISOString();
-            const response = await checkAvailability(formattedDate, selectedSlot.start, selectedSlot.end);
+            const formattedDate = formatLocalDate(date);
+            const response = await checkAvailability(formattedDate, selectedSlot.start, endTime);
             let availabilityData = response.data;
-            
-            // Hide DEMO-101 after tutorial completion or skip
+
             if (hideDemoRoom && availabilityData.available) {
                 availabilityData.available = availabilityData.available.filter(room => room.roomNumber !== 'DEMO-101');
             }
-            
+
             setAvailability(availabilityData);
         } catch (error) {
             console.error(error);
@@ -82,21 +126,40 @@ const BookRoom = () => {
         e.preventDefault();
         if (!selectedRoom) return;
 
+        const params = new URLSearchParams(location.search);
+        const returnTo = params.get('returnTo');
+        const returnUrl = params.get('returnUrl');
+
+        if (returnTo === 'semester' && returnUrl) {
+            // SELECTION MODE: Don't create booking yet, just return the data
+            setBookingStatus('success');
+            setBookingMessage(`Selected ${selectedRoom.roomNumber}. Saving entry will confirm booking.`);
+
+            setTimeout(() => {
+                const decodedUrl = decodeURIComponent(returnUrl);
+                const urlObj = new URL(decodedUrl, window.location.origin);
+                urlObj.searchParams.set('bookedRoom', selectedRoom.roomNumber);
+                urlObj.searchParams.set('endTime', endTime);
+                urlObj.searchParams.set('pendingBookingAction', 'create'); // Signal that we need to create a booking on save
+                navigate(urlObj.pathname + urlObj.search);
+            }, 1000);
+            return;
+        }
+
         setBookingStatus('submitting');
         try {
             await createBooking({
                 roomNumber: selectedRoom.roomNumber,
-                date: date.toISOString(),
-                timeSlot: { start: selectedSlot.start, end: selectedSlot.end },
+                date: formatLocalDate(date),
+                timeSlot: { start: selectedSlot.start, end: endTime },
                 batch: user?.role === 'cr' && user?.batch ? user.batch : batch,
                 purpose
             });
 
             setBookingStatus('success');
             setBookingMessage(`Successfully booked ${selectedRoom.roomNumber}!`);
-            fetchAvailability(); // Refresh availability
 
-            // Reset form after delay
+            fetchAvailability();
             setTimeout(() => {
                 setBookingStatus('idle');
                 setSelectedRoom(null);
@@ -105,8 +168,6 @@ const BookRoom = () => {
 
         } catch (error) {
             setBookingStatus('error');
-            console.error('Booking error:', error);
-            console.error('Error response:', error.response?.data);
             const errorMsg = error.response?.data?.details || error.response?.data?.error || 'Booking failed';
             setBookingMessage(errorMsg);
         }
@@ -144,24 +205,62 @@ const BookRoom = () => {
                     <div className="glass-card p-6 rounded-2xl">
                         <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
                             <Clock size={18} className="text-primary-500" />
-                            Select Time
+                            Select Start Time
                         </h3>
                         <div className="grid grid-cols-2 gap-3" data-tutorial="select-time">
                             {timeSlots.map(slot => (
                                 <button
                                     key={slot.start}
-                                    onClick={() => setSelectedSlot(slot)}
+                                    onClick={() => {
+                                        setSelectedSlot(slot);
+                                        setEndTime(slot.end);
+                                    }}
                                     className={`p-3 rounded-lg text-sm font-medium transition-all text-center
-                    ${selectedSlot?.start === slot.start
+                                        ${selectedSlot?.start === slot.start
                                             ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30 scale-105'
                                             : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                         }`}
                                 >
-                                    {slot.label}
+                                    {slot.label.split(' - ')[0]}
                                 </button>
                             ))}
                         </div>
                     </div>
+
+                    {/* End Time Selection */}
+                    {selectedSlot && (
+                        <div className="glass-card p-6 rounded-2xl animate-fade-in shadow-inner bg-slate-50/50 border border-slate-100">
+                            <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
+                                <Clock size={18} className="text-secondary-500" />
+                                Select Duration (Until)
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                {endTimes
+                                    .filter(t => t.value > selectedSlot.start)
+                                    .map(t => (
+                                        <button
+                                            key={t.value}
+                                            onClick={() => setEndTime(t.value)}
+                                            className={`p-3 rounded-lg text-sm font-medium transition-all text-center
+                                                ${endTime === t.value
+                                                    ? 'bg-secondary-500 text-white shadow-lg shadow-secondary-500/30 scale-105'
+                                                    : 'bg-white text-slate-600 border border-slate-200 hover:border-secondary-300 hover:text-secondary-600'
+                                                }`}
+                                        >
+                                            {t.label}
+                                        </button>
+                                    ))}
+                            </div>
+                            <div className="mt-4 pt-3 border-t border-slate-200/50 flex flex-col items-center">
+                                <p className="text-[10px] text-slate-400">Selected Range:</p>
+                                <p className="text-xs font-bold text-slate-700">
+                                    <span className="text-primary-600">{selectedSlot.start}</span>
+                                    <span className="mx-2 text-slate-300">→</span>
+                                    <span className="text-secondary-600">{endTime}</span>
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Right Column: Results */}
@@ -181,7 +280,7 @@ const BookRoom = () => {
                                 <h3 className="text-xl font-bold text-slate-800">
                                     Available Rooms
                                     <span className="ml-2 text-sm font-normal text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                                        {date.toDateString()} • {selectedSlot.label}
+                                        {date.toDateString()} • {selectedSlot.start} - {endTime}
                                     </span>
                                 </h3>
                                 <span className="text-sm font-medium text-green-600 bg-green-50 px-3 py-1 rounded-full">
@@ -226,7 +325,6 @@ const BookRoom = () => {
                                                 <div className="mb-3">
                                                     <span className="font-bold text-lg text-slate-800">{occ.roomNumber}</span>
                                                 </div>
-
                                                 <div className="space-y-2">
                                                     <div className="flex items-start gap-2 text-sm font-medium text-slate-800">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-orange-500 mt-1.5 shrink-0"></span>
@@ -263,7 +361,6 @@ const BookRoom = () => {
                                                         Class
                                                     </span>
                                                 </div>
-
                                                 <div className="space-y-1.5">
                                                     <div className="flex items-start gap-2 text-sm font-medium text-slate-800">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-1.5 shrink-0"></span>
@@ -293,7 +390,7 @@ const BookRoom = () => {
                             <div>
                                 <h3 className="text-xl font-bold">Book {selectedRoom.roomNumber}</h3>
                                 <p className="text-white/80 text-sm mt-1">
-                                    {date.toDateString()} • {selectedSlot.label}
+                                    {date.toDateString()} • {selectedSlot.start} - {endTime}
                                 </p>
                             </div>
                             <button onClick={() => setSelectedRoom(null)} className="text-white/70 hover:text-white transition-colors">
@@ -302,7 +399,6 @@ const BookRoom = () => {
                         </div>
 
                         <form onSubmit={handleBook} className="p-6 space-y-4">
-                            {/* Show batch selector only if not a CR with assigned batch */}
                             {!(user?.role === 'cr' && user?.batch) && (
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Select Batch</label>
@@ -318,7 +414,6 @@ const BookRoom = () => {
                                 </div>
                             )}
 
-                            {/* Show batch info for CRs */}
                             {user?.role === 'cr' && user?.batch && (
                                 <div className="p-3 bg-primary-50 border border-primary-200 rounded-lg">
                                     <p className="text-sm text-primary-700">
@@ -334,7 +429,6 @@ const BookRoom = () => {
                                     value={name}
                                     disabled
                                     className="w-full px-4 py-2 rounded-lg border border-slate-300 bg-slate-50 text-slate-600"
-                                    placeholder="Your name"
                                 />
                                 <p className="text-xs text-slate-500 mt-1">Auto-filled from your account</p>
                             </div>
@@ -366,14 +460,20 @@ const BookRoom = () => {
                                 type="submit"
                                 disabled={bookingStatus === 'submitting' || bookingStatus === 'success'}
                                 className={`w-full py-3 rounded-xl font-bold text-white transition-all shadow-lg shadow-primary-500/30 mt-4
-                  ${bookingStatus === 'submitting'
+                                    ${bookingStatus === 'submitting'
                                         ? 'bg-slate-400 cursor-not-allowed'
                                         : bookingStatus === 'success'
                                             ? 'bg-green-500 hover:bg-green-600'
                                             : 'bg-gradient-to-r from-primary-600 to-primary-500 hover:scale-[1.02] active:scale-[0.98]'
                                     }`}
                             >
-                                {bookingStatus === 'submitting' ? 'Confirming...' : bookingStatus === 'success' ? 'Booked!' : 'Confirm Booking'}
+                                {bookingStatus === 'submitting'
+                                    ? 'Confirming...'
+                                    : bookingStatus === 'success'
+                                        ? 'Confirmed!'
+                                        : new URLSearchParams(location.search).get('returnTo') === 'semester'
+                                            ? 'Confirm Selection'
+                                            : 'Confirm Booking'}
                             </button>
                         </form>
                     </div>
