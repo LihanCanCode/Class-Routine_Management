@@ -262,11 +262,13 @@ router.get('/availability', async (req, res) => {
         // Get the start of the week for the selected date
         const weekStart = getWeekStartDate(selectedDate);
 
-        // Fetch only week-specific overrides for this week (templates are ignored for availability search)
+        // Fetch relevant semester schedule entries (both templates and overrides to detect unblocks/cancellations)
         const semesterScheds = await SemesterSchedule.find({
             day: dayOfWeek,
-            isTemplate: false,
-            weekStartDate: weekStart,
+            $or: [
+                { isTemplate: true },
+                { isTemplate: false, weekStartDate: weekStart }
+            ],
             $or: [
                 {
                     'timeSlot.start': { $lte: startTime },
@@ -283,9 +285,10 @@ router.get('/availability', async (req, res) => {
             ]
         });
 
-        // Rooms can have multiple sub-slots, we care if ANY active sub-slot occupies the room
+        // Group by roomNumber and slot to resolve overrides
         const activeSemesterRooms = new Set();
-        const roomEntries = {}; // room -> slotKey -> entry
+        const cancelledRooms = new Set(); // Track explicit UNBLOCKS (status: cancelled)
+        const roomEntries = {}; // room -> slotKey -> entry (resolved override)
 
         semesterScheds.forEach(s => {
             const roomNum = s.roomNumber.trim();
@@ -294,16 +297,24 @@ router.get('/availability', async (req, res) => {
             if (!roomEntries[roomNum]) roomEntries[roomNum] = {};
             const slotKey = `${s.timeSlot.start}_${s.subSlotIndex || 0}`;
 
-            // Overrides (isTemplate: false) take priority
-            roomEntries[roomNum][slotKey] = s;
+            // Override Logic: Week-specific override (isTemplate: false) wins over Base Template
+            if (!roomEntries[roomNum][slotKey] || (!s.isTemplate && roomEntries[roomNum][slotKey].isTemplate)) {
+                roomEntries[roomNum][slotKey] = s;
+            }
         });
 
-        // Now check which rooms are actually occupied
+        // Evaluate room occupancy/unblocking based on resolved statuses
         Object.keys(roomEntries).forEach(roomNum => {
             const slots = roomEntries[roomNum];
-            const hasActiveSlot = Object.values(slots).some(entry => entry.status === 'active');
-            if (hasActiveSlot) {
+            const activeSlots = Object.values(slots).filter(entry => entry.status === 'active');
+            const cancelledSlots = Object.values(slots).filter(entry => entry.status === 'cancelled');
+
+            if (activeSlots.length > 0) {
+                // If any resolved subslot for this room is active, it's occupied (Orange card source)
                 activeSemesterRooms.add(roomNum);
+            } else if (cancelledSlots.length > 0) {
+                // If there are NO active slots but there IS a cancelled slot, it acts as a Routine Unblock
+                cancelledRooms.add(roomNum);
             }
         });
 
@@ -313,6 +324,15 @@ router.get('/availability', async (req, res) => {
             ...bookings.map(b => b.roomNumber.trim()),
             ...Array.from(activeSemesterRooms)
         ]);
+
+        // IMPORTANT: If a room was explicitly unblocked (cancelled in semester routine),
+        // we must remove it from the preliminary occupied set if it came from the static routine (schedules).
+        cancelledRooms.forEach(roomNum => {
+            const inStaticRoutine = schedules.some(s => s.roomNumber.trim() === roomNum);
+            if (inStaticRoutine) {
+                occupiedRoomNumbers.delete(roomNum);
+            }
+        });
 
         // Categorize rooms
         const availableRooms = allRooms.filter(room => {
@@ -327,11 +347,11 @@ router.get('/availability', async (req, res) => {
         // 1. Process Manual Semester Schedules (Resolving Overrides) - HIGH PRIORITY
         Object.keys(roomEntries).forEach(roomNum => {
             const slots = roomEntries[roomNum];
+            // Only show as Orange Card if the resolved entry is ACTIVE
             const activeEntry = Object.values(slots).find(entry => entry.status === 'active');
 
             if (activeEntry) {
                 const roomTrimmed = roomNum.trim();
-                // Anything manual from schedule page --> "Student Booking" (Orange Card)
                 bookingMap.set(roomTrimmed, {
                     roomNumber: roomTrimmed,
                     batch: activeEntry.batch,
@@ -361,8 +381,10 @@ router.get('/availability', async (req, res) => {
         // 3. Add original static schedules (PDF source) - LOW PRIORITY
         schedules.forEach(s => {
             const roomNum = s.roomNumber.trim();
-            // ONLY show as Gray Class if not already appearing as Orange Booking
-            if (!bookingMap.has(roomNum)) {
+            // ONLY show as Gray Class if:
+            // 1. Not already appearing as Orange Booking
+            // 2. Not explicitly CANCELLED in the semester routine (Unblocked)
+            if (!bookingMap.has(roomNum) && !cancelledRooms.has(roomNum)) {
                 scheduleMap.set(roomNum, {
                     roomNumber: roomNum,
                     course: s.course,

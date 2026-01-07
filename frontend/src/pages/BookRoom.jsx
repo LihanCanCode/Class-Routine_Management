@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
-import { checkAvailability, createBooking, getBatches } from '../services/api';
+import { checkAvailability, createBooking, getBatches, deleteBooking } from '../services/api';
 import { Clock, MapPin, Users, Calendar as CalendarIcon, Check, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTutorial } from '../context/TutorialContext';
@@ -322,8 +322,23 @@ const BookRoom = () => {
                                                 <div className="absolute top-0 right-0 p-1.5 bg-orange-100 text-orange-600 rounded-bl-lg text-[10px] font-bold tracking-wider">
                                                     BOOKED
                                                 </div>
-                                                <div className="mb-3">
+                                                <div className="mb-3 flex items-center justify-between gap-2">
                                                     <span className="font-bold text-lg text-slate-800">{occ.roomNumber}</span>
+                                                    {/* Cancel button for own booking */}
+                                                    {user && occ.bookedBy === user.name && (
+                                                        <button
+                                                            className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 font-bold hover:bg-red-200 transition-colors"
+                                                            title="Cancel this booking"
+                                                            onClick={async () => {
+                                                                if (window.confirm('Are you sure you want to cancel this booking?')) {
+                                                                    await deleteBooking(occ.bookingId);
+                                                                    fetchAvailability();
+                                                                }
+                                                            }}
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                    )}
                                                 </div>
                                                 <div className="space-y-2">
                                                     <div className="flex items-start gap-2 text-sm font-medium text-slate-800">

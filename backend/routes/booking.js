@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Booking = require('../models/Booking');
 const Schedule = require('../models/Schedule');
+const SemesterSchedule = require('../models/SemesterSchedule');
 const auth = require('../middleware/auth');
 
 // Create a new booking
@@ -252,6 +253,18 @@ router.delete('/:id', async (req, res) => {
 
         booking.status = 'cancelled';
         await booking.save();
+
+        // Sync with SemesterSchedule: If any manual entry is linked to this booking, cancel it too
+        // This ensures the room is freed in the routine-aware availability logic
+        try {
+            await SemesterSchedule.updateMany(
+                { bookingId: booking._id },
+                { status: 'cancelled' }
+            );
+        } catch (syncErr) {
+            console.error('Failed to sync SemesterSchedule status during booking cancellation:', syncErr);
+            // We don't fail the whole request since the primary booking is already cancelled
+        }
 
         res.json({
             success: true,
