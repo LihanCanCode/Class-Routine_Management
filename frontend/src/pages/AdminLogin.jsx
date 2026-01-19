@@ -90,7 +90,7 @@ const AdminLogin = () => {
                         R
                     </div>
                     <h1 className="text-3xl font-bold bg-gradient-to-r from-primary-600 to-secondary-600 bg-clip-text text-transparent mb-2">
-                        Login
+                        Login <span className="text-xs font-mono bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full ml-1">V2.0</span>
                     </h1>
                     <p className="text-slate-500">Sign in to access schedules</p>
                     <p className="text-slate-600">
