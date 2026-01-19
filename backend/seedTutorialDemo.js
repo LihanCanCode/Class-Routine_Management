@@ -1,10 +1,11 @@
+require('dotenv').config();
 const mongoose = require('mongoose');
 const Room = require('./models/Room');
 const Schedule = require('./models/Schedule');
 
 const seedTutorialDemo = async () => {
     try {
-        await mongoose.connect('mongodb://localhost:27017/room-booking', {
+        await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true
         });
@@ -40,7 +41,7 @@ const seedTutorialDemo = async () => {
         const today = new Date();
         const nextMonday = new Date(today);
         nextMonday.setDate(today.getDate() + ((1 + 7 - today.getDay()) % 7 || 7));
-        
+
         // Create demo schedules (Monday to Thursday, some slots)
         const demoSchedules = [
             // Monday - Normal schedule
@@ -75,7 +76,7 @@ const seedTutorialDemo = async () => {
                 semester: 'Spring 2026',
                 department: 'CSE'
             },
-            
+
             // Tuesday - Has a RED FLAGGED schedule
             {
                 roomNumber: 'DEMO-101',
