@@ -3,8 +3,14 @@ import axios from 'axios';
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const prodUrl = 'https://class-routine-management.onrender.com';
 
+const baseURL = import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== 'undefined'
+    ? import.meta.env.VITE_API_URL
+    : (isLocalhost ? 'http://localhost:5000/api' : `${prodUrl}/api`);
+
+console.log('🌐 API Base URL:', baseURL);
+
 const API = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || (isLocalhost ? 'http://localhost:5000/api' : `${prodUrl}/api`),
+    baseURL,
 });
 
 // Add auth token to requests
