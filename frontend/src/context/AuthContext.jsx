@@ -22,7 +22,8 @@ export const AuthProvider = ({ children }) => {
             const savedToken = localStorage.getItem('token');
             if (savedToken) {
                 try {
-                    const response = await axios.get('http://localhost:5000/api/auth/me', {
+                    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+                    const response = await axios.get(`${apiUrl}/auth/me`, {
                         headers: { Authorization: `Bearer ${savedToken}` }
                     });
                     setUser(response.data.user);
@@ -43,7 +44,8 @@ export const AuthProvider = ({ children }) => {
 
     const login = async (email, password) => {
         try {
-            const response = await axios.post('http://localhost:5000/api/auth/login', {
+            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+            const response = await axios.post(`${apiUrl}/auth/login`, {
                 email,
                 password
             });
@@ -66,7 +68,8 @@ export const AuthProvider = ({ children }) => {
 
     const guestLogin = async (name, pageNumber) => {
         try {
-            const response = await axios.post('http://localhost:5000/api/auth/guest-login', {
+            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+            const response = await axios.post(`${apiUrl}/auth/guest-login`, {
                 name,
                 pageNumber
             });

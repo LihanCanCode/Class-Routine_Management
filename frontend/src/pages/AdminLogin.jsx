@@ -26,7 +26,8 @@ const AdminLogin = () => {
                 // However, guests haven't logged in yet. 
                 // I might need a public endpoint for pages or allow guests to fetch pages without token.
                 // Let's assume for now we might need a public endpoint or update existing one.
-                const response = await axios.get('http://localhost:5000/api/schedule/semester-pages');
+                const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+                const response = await axios.get(`${apiUrl}/schedule/semester-pages`);
                 if (response.data.success) {
                     setSemesterPages(response.data.pages || []);
                 }

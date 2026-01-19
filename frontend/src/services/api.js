@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const API = axios.create({
-    baseURL: 'http://localhost:5000/api',
+    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
 });
 
 // Add auth token to requests
@@ -144,7 +144,8 @@ export const getPDFInfo = async (type, department) => {
 
 export const getPDFUrl = (type) => {
     const token = localStorage.getItem('token');
-    return `http://localhost:5000/api/schedule/pdf/${type}?token=${token}`;
+    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    return `${serverUrl}/api/schedule/pdf/${type}?token=${token}`;
 };
 
 export const getBatchList = async (type, department) => {
@@ -156,7 +157,8 @@ export const getBatchList = async (type, department) => {
 export const getFilteredPDFUrl = (type, filter) => {
     const token = localStorage.getItem('token');
     const encodedFilter = encodeURIComponent(filter);
-    return `http://localhost:5000/api/schedule/pdf/${type}/filtered?token=${token}&filter=${encodedFilter}`;
+    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    return `${serverUrl}/api/schedule/pdf/${type}/filtered?token=${token}&filter=${encodedFilter}`;
 };
 
 export const getSemesterSchedules = async (batch) => {
@@ -172,7 +174,8 @@ export const getSemesterPages = async () => {
 
 export const getSemesterPageUrl = (pageNumber) => {
     const token = localStorage.getItem('token');
-    return `http://localhost:5000/api/schedule/semester-page/${pageNumber}?token=${token}`;
+    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    return `${serverUrl}/api/schedule/semester-page/${pageNumber}?token=${token}`;
 };
 
 export const updateSemesterPageBatchName = async (pageNumber, batchName) => {
