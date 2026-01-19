@@ -12,7 +12,13 @@ const ViewSemesterSchedule = () => {
     const [loading, setLoading] = useState(true);
     const [selectedPage, setSelectedPage] = useState(() => {
         const params = new URLSearchParams(window.location.search);
-        return parseInt(params.get('pageNumber')) || 1;
+        const urlPage = parseInt(params.get('pageNumber'));
+        if (urlPage) return urlPage;
+
+        // If user has a preferred page saved (guest persistence), use it
+        if (user?.preferredSemesterPage) return user.preferredSemesterPage;
+
+        return 1;
     });
     const [totalPages, setTotalPages] = useState(0);
     const [exists, setExists] = useState(false);
@@ -26,7 +32,7 @@ const ViewSemesterSchedule = () => {
         const params = new URLSearchParams(window.location.search);
         const urlOffset = params.get('weekOffset');
         if (urlOffset !== null) return parseInt(urlOffset);
-        return user?.role === 'admin' || user?.role === 'cr' ? 0 : 1;
+        return 1; // Always default to current week (offset 1) if not specified in URL
     });
     const [currentWeekStart, setCurrentWeekStart] = useState(null);
 
@@ -257,6 +263,10 @@ const ViewSemesterSchedule = () => {
 
                 setSelectedPage(prev => {
                     if (urlPage && urlPage <= response.data.totalPages) return urlPage;
+                    // If no URL page, check for user preference
+                    if (user?.preferredSemesterPage && user.preferredSemesterPage <= response.data.totalPages) {
+                        return user.preferredSemesterPage;
+                    }
                     if (prev > 1 && prev <= response.data.totalPages) return prev;
                     return 1;
                 });

@@ -211,7 +211,7 @@ router.get('/availability', async (req, res) => {
         // Get all rooms
         const allRooms = await Room.find({});
 
-        // Get schedules for this day and time slot
+        // Get schedules for this day and time slot (room-based routine)
         const schedules = await Schedule.find({
             day: dayOfWeek,
             $or: [
@@ -230,6 +230,9 @@ router.get('/availability', async (req, res) => {
             ]
         });
 
+        // Build a set of room+slot keys for room-based routines
+        const roomSlotKey = (room, slotStart, slotEnd) => `${room.trim()}_${slotStart}_${slotEnd}`;
+        const roomBasedKeys = new Set(schedules.map(s => roomSlotKey(s.roomNumber, s.timeSlot.start, s.timeSlot.end)));
         // Get bookings for this specific date range
         // We match bookings that are on the same calendar day
         const startOfDay = new Date(selectedDate);
@@ -262,8 +265,8 @@ router.get('/availability', async (req, res) => {
         // Get the start of the week for the selected date
         const weekStart = getWeekStartDate(selectedDate);
 
-        // Fetch relevant semester schedule entries (both templates and overrides to detect unblocks/cancellations)
-        const semesterScheds = await SemesterSchedule.find({
+        // Fetch relevant semester schedule entries (semester-wise routine)
+        let semesterScheds = await SemesterSchedule.find({
             day: dayOfWeek,
             $or: [
                 { isTemplate: true },
@@ -284,6 +287,8 @@ router.get('/availability', async (req, res) => {
                 }
             ]
         });
+        // Filter out semester-wise entries if a room-based routine exists for the same room+slot
+        semesterScheds = semesterScheds.filter(s => !roomBasedKeys.has(roomSlotKey(s.roomNumber, s.timeSlot.start, s.timeSlot.end)));
 
         // Group by roomNumber and slot to resolve overrides
         const activeSemesterRooms = new Set();
@@ -352,14 +357,28 @@ router.get('/availability', async (req, res) => {
 
             if (activeEntry) {
                 const roomTrimmed = roomNum.trim();
-                bookingMap.set(roomTrimmed, {
-                    roomNumber: roomTrimmed,
-                    batch: activeEntry.batch,
-                    purpose: activeEntry.course || 'Private Booking',
-                    bookedBy: activeEntry.teacher || 'CR/Admin',
-                    reason: 'booked',
-                    bookingId: activeEntry.bookingId || 'manual-routine'
-                });
+                // If isTemplate: true, this is a base template (should be scheduled_class)
+                if (activeEntry.isTemplate) {
+                    scheduleMap.set(roomTrimmed, {
+                        roomNumber: roomTrimmed,
+                        course: activeEntry.course,
+                        batch: activeEntry.batch,
+                        reason: 'scheduled_class',
+                        routineType: 'semester-wise'
+                    });
+                }
+                // Only add to bookingMap if isTemplate is false (week-specific/manual)
+                if (!activeEntry.isTemplate) {
+                    bookingMap.set(roomTrimmed, {
+                        roomNumber: roomTrimmed,
+                        batch: activeEntry.batch,
+                        purpose: activeEntry.course || 'Private Booking',
+                        bookedBy: activeEntry.teacher || 'CR/Admin',
+                        reason: 'booked',
+                        bookingId: activeEntry.bookingId || 'manual-routine',
+                        routineType: 'semester-wise'
+                    });
+                }
             }
         });
 
@@ -373,7 +392,8 @@ router.get('/availability', async (req, res) => {
                     purpose: b.purpose,
                     bookedBy: b.bookedBy?.name,
                     reason: 'booked',
-                    bookingId: b._id
+                    bookingId: b._id,
+                    routineType: 'booking'
                 });
             }
         });
@@ -389,7 +409,8 @@ router.get('/availability', async (req, res) => {
                     roomNumber: roomNum,
                     course: s.course,
                     batch: s.batch,
-                    reason: 'scheduled_class'
+                    reason: 'scheduled_class',
+                    routineType: 'room-based'
                 });
             }
         });
@@ -1007,13 +1028,14 @@ router.get('/course-nicknames', auth, async (req, res) => {
     }
 });
 
-// Get semester-wise pages (accessible to all authenticated users including viewers)
-router.get('/semester-pages', authOrGuest, async (req, res) => {
+// Get semester-wise pages (publicly accessible)
+router.get('/semester-pages', async (req, res) => {
     try {
         let query = { type: 'semester-wise' };
 
-        // If user has a department, filter by it; otherwise show first available
-        if (req.user.department) {
+        // If user is authenticated and has a department, filter by it
+        // Note: auth middleware is NOT used here to allow public access on login page
+        if (req.user?.department) {
             query.department = req.user.department;
         }
 

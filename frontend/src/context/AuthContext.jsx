@@ -20,17 +20,7 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         const checkAuth = async () => {
             const savedToken = localStorage.getItem('token');
-            const guestMode = localStorage.getItem('guestMode');
-            
-            if (guestMode === 'true') {
-                // Restore guest session
-                setUser({
-                    name: 'Guest',
-                    role: 'viewer',
-                    isGuest: true
-                });
-                setLoading(false);
-            } else if (savedToken) {
+            if (savedToken) {
                 try {
                     const response = await axios.get('http://localhost:5000/api/auth/me', {
                         headers: { Authorization: `Bearer ${savedToken}` }
@@ -59,11 +49,11 @@ export const AuthProvider = ({ children }) => {
             });
 
             const { token: newToken, user: userData } = response.data;
-            
+
             localStorage.setItem('token', newToken);
             setToken(newToken);
             setUser(userData);
-            
+
             return { success: true, user: userData };
         } catch (error) {
             console.error('Login error:', error);
@@ -74,21 +64,31 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
-    const guestLogin = () => {
-        // Set a guest user without token
-        const guestUser = {
-            name: 'Guest',
-            role: 'viewer',
-            isGuest: true
-        };
-        setUser(guestUser);
-        localStorage.setItem('guestMode', 'true');
-        return { success: true, user: guestUser };
+    const guestLogin = async (name, pageNumber) => {
+        try {
+            const response = await axios.post('http://localhost:5000/api/auth/guest-login', {
+                name,
+                pageNumber
+            });
+
+            const { token: newToken, user: userData } = response.data;
+
+            localStorage.setItem('token', newToken);
+            setToken(newToken);
+            setUser(userData);
+
+            return { success: true, user: userData };
+        } catch (error) {
+            console.error('Guest login error:', error);
+            return {
+                success: false,
+                error: error.response?.data?.error || 'Guest login failed'
+            };
+        }
     };
 
     const logout = () => {
         localStorage.removeItem('token');
-        localStorage.removeItem('guestMode');
         setToken(null);
         setUser(null);
     };

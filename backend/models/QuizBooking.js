@@ -29,6 +29,11 @@ const quizBookingSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    quizType: {
+        type: String,
+        enum: ['manual', 'classtime'],
+        default: 'manual'
+    },
     bookedBy: {
         name: String,
         email: String

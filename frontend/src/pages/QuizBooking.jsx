@@ -40,8 +40,30 @@ const QuizBooking = () => {
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
 
+    // Classtime quiz modal state
+    const [showClasstimeModal, setShowClasstimeModal] = useState(false);
+    const [classtimeFormData, setClasstimeFormData] = useState({
+        course: '',
+        date: '',
+        timeSlot: '08:00-09:15', // Combined start-end format
+        roomNumber: '',
+        batch: '',
+        syllabus: '',
+        teacherComment: ''
+    });
+
     // Batch options
     const batchOptions = ['CSE 24', 'SWE 24', 'CSE 23', 'SWE 23', 'CSE 22', 'SWE 22', 'CSE 21', 'SWE 21', 'MSc(CSE)', 'All'];
+
+    // Class time slots for classtime quiz
+    const classTimeSlots = [
+        { start: '08:00', end: '09:15', label: '8:00 AM - 9:15 AM' },
+        { start: '09:30', end: '10:45', label: '9:30 AM - 10:45 AM' },
+        { start: '11:00', end: '12:15', label: '11:00 AM - 12:15 PM' },
+        { start: '12:30', end: '13:45', label: '12:30 PM - 1:45 PM' },
+        { start: '14:00', end: '15:15', label: '2:00 PM - 3:15 PM' },
+        { start: '15:30', end: '16:45', label: '3:30 PM - 4:45 PM' }
+    ];
 
     // Always show 7 days
     const daysToShow = 7;
@@ -60,12 +82,12 @@ const QuizBooking = () => {
         try {
             const response = await getQuizConfig();
             let configData = response.data;
-            
+
             // Hide DEMO-101 after tutorial completion or skip
             if (hideDemoRoom && configData.rooms) {
                 configData.rooms = configData.rooms.filter(room => room !== 'DEMO-101');
             }
-            
+
             setConfig(configData);
         } catch (err) {
             console.error('Failed to fetch config:', err);
@@ -145,7 +167,8 @@ const QuizBooking = () => {
                 course: booking.course || '',
                 batch: booking.batch || '',
                 syllabus: booking.syllabus || '',
-                teacherComment: booking.teacherComment || ''
+                teacherComment: booking.teacherComment || '',
+                bookedBy: booking.bookedBy
             });
             // Load courses for the batch
             if (booking.batch) {
@@ -172,7 +195,7 @@ const QuizBooking = () => {
             setAvailableCourses([]);
             return;
         }
-        
+
         setLoadingCourses(true);
         try {
             const response = await getCoursesByBatch(batch);
@@ -194,7 +217,7 @@ const QuizBooking = () => {
     // Save booking
     const handleSave = async () => {
         const batchValue = user?.role === 'cr' && user?.batch ? user.batch : formData.batch;
-        
+
         if (!batchValue.trim()) {
             setError('Batch is required');
             return;
@@ -264,6 +287,89 @@ const QuizBooking = () => {
         setStartDate(newDate);
     };
 
+    // Handle classtime quiz button click
+    const handleClasstimeClick = () => {
+        const defaultBatch = user?.role === 'cr' && user?.batch ? user.batch : 'CSE 24';
+        setClasstimeFormData({
+            course: '',
+            date: new Date().toISOString().split('T')[0],
+            timeSlot: '08:00-09:15',
+            roomNumber: config.rooms[0] || '',
+            batch: defaultBatch,
+            syllabus: '',
+            teacherComment: ''
+        });
+        setError('');
+        // Load courses for default batch
+        fetchCoursesForBatch(defaultBatch);
+        setShowClasstimeModal(true);
+    };
+
+    // Handle batch change for classtime quiz
+    const handleClasstimeBatchChange = (newBatch) => {
+        setClasstimeFormData({ ...classtimeFormData, batch: newBatch, course: '' });
+        fetchCoursesForBatch(newBatch);
+    };
+
+    // Save classtime quiz booking
+    const handleClasstimeSave = async () => {
+        const batchValue = user?.role === 'cr' && user?.batch ? user.batch : classtimeFormData.batch;
+
+        if (!batchValue.trim()) {
+            setError('Batch is required');
+            return;
+        }
+
+        if (!classtimeFormData.course.trim()) {
+            setError('Course is required');
+            return;
+        }
+
+        if (!classtimeFormData.roomNumber) {
+            setError('Room is required');
+            return;
+        }
+
+        if (!classtimeFormData.date) {
+            setError('Date is required');
+            return;
+        }
+
+        if (!classtimeFormData.timeSlot) {
+            setError('Time slot is required');
+            return;
+        }
+
+        setSaving(true);
+        setError('');
+
+        try {
+            // Parse timeSlot format "08:00-09:15" into start and end
+            const [start, end] = classtimeFormData.timeSlot.split('-');
+
+            await createQuizBooking({
+                roomNumber: classtimeFormData.roomNumber,
+                date: classtimeFormData.date,
+                timeSlot: {
+                    start: start,
+                    end: end
+                },
+                course: classtimeFormData.course,
+                batch: batchValue,
+                syllabus: classtimeFormData.syllabus || '',
+                teacherComment: classtimeFormData.teacherComment || '',
+                quizType: 'classtime'
+            });
+
+            setShowClasstimeModal(false);
+            fetchBookings();
+        } catch (err) {
+            setError(err.response?.data?.error || 'Failed to save booking');
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const dates = getDates();
 
     return (
@@ -280,6 +386,15 @@ const QuizBooking = () => {
                 </div>
 
                 <div className="flex items-center gap-4">
+                    {/* Classtime Quiz Button */}
+                    <button
+                        onClick={handleClasstimeClick}
+                        className="px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white rounded-lg transition-all flex items-center gap-2 shadow-md"
+                    >
+                        <BookOpen size={18} />
+                        Classtime Quiz
+                    </button>
+
                     {/* Date Navigation */}
                     <div className="flex items-center gap-2">
                         <button
@@ -368,12 +483,18 @@ const QuizBooking = () => {
                                                                 onClick={() => handleCellClick(date, room, slot, booking)}
                                                             >
                                                                 {booking ? (
-                                                                    <div className="bg-orange-100 border border-orange-200 rounded px-1 py-0.5 text-center">
-                                                                        <span className="text-xs font-semibold text-orange-800">
+                                                                    <div className={`${booking.quizType === 'classtime'
+                                                                        ? 'bg-gradient-to-br from-purple-100 to-indigo-100 border-purple-300'
+                                                                        : 'bg-orange-100 border-orange-200'
+                                                                        } border rounded px-1 py-0.5 text-center`}>
+                                                                        <span className={`text-xs font-semibold ${booking.quizType === 'classtime' ? 'text-purple-800' : 'text-orange-800'
+                                                                            }`}>
+                                                                            {booking.quizType === 'classtime' && '🎓 '}
                                                                             {formatBatch(booking.batch)}
                                                                         </span>
                                                                         {booking.course && (
-                                                                            <p className="text-[10px] text-orange-600 truncate mt-0.5">
+                                                                            <p className={`text-[10px] truncate mt-0.5 ${booking.quizType === 'classtime' ? 'text-purple-600' : 'text-orange-600'
+                                                                                }`}>
                                                                                 {booking.course}
                                                                             </p>
                                                                         )}
@@ -521,10 +642,21 @@ const QuizBooking = () => {
                                     className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-sm resize-none"
                                 />
                             </div>
+
+                            {modalMode === 'edit' && formData.bookedBy && (
+                                <div className="pt-2 border-t border-slate-100">
+                                    <p className="text-[10px] text-slate-400">
+                                        Booked by: <span className="font-medium text-slate-600">{formData.bookedBy.name} ({formData.bookedBy.email})</span>
+                                        {formData.bookedBy.email !== user?.email && (
+                                            <span className="text-red-400 ml-2"> (Only owner can modify)</span>
+                                        )}
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         <div className="p-6 border-t border-slate-100 flex items-center justify-between gap-3">
-                            {modalMode === 'edit' && (
+                            {modalMode === 'edit' && formData.bookedBy?.email === user?.email && (
                                 <button
                                     onClick={handleDelete}
                                     disabled={saving}
@@ -541,8 +673,191 @@ const QuizBooking = () => {
                             >
                                 Cancel
                             </button>
+                            {(modalMode === 'create' || formData.bookedBy?.email === user?.email) && (
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    className="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    {saving ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                                            Saving...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Save size={16} />
+                                            {modalMode === 'create' ? 'Book Slot' : 'Save Changes'}
+                                        </>
+                                    )}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Classtime Quiz Modal */}
+            {showClasstimeModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-md w-full animate-fade-in max-h-[90vh] overflow-y-auto">
+                        <div className="p-6 border-b border-slate-100">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-bold text-slate-800">
+                                    Book Quiz Slot
+                                </h2>
+                                <button
+                                    onClick={() => setShowClasstimeModal(false)}
+                                    className="text-slate-400 hover:text-slate-600 transition-colors"
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            {/* Date, Time, Room Info */}
+                            <div className="mt-4 space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <Calendar size={16} className="text-slate-500" />
+                                    <input
+                                        type="date"
+                                        value={classtimeFormData.date}
+                                        onChange={(e) => setClasstimeFormData({ ...classtimeFormData, date: e.target.value })}
+                                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Clock size={16} className="text-slate-500" />
+                                    <select
+                                        value={classtimeFormData.timeSlot}
+                                        onChange={(e) => setClasstimeFormData({ ...classtimeFormData, timeSlot: e.target.value })}
+                                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    >
+                                        {classTimeSlots.map(slot => (
+                                            <option key={slot.start} value={`${slot.start}-${slot.end}`}>
+                                                {slot.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-orange-600 font-medium text-sm">Room</span>
+                                    <select
+                                        value={classtimeFormData.roomNumber}
+                                        onChange={(e) => setClasstimeFormData({ ...classtimeFormData, roomNumber: e.target.value })}
+                                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm font-medium text-orange-600 focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    >
+                                        {config.rooms.map(room => (
+                                            <option key={room} value={room}>{room}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-6 space-y-4">
+                            {error && (
+                                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                                    {error}
+                                </div>
+                            )}
+
+                            {/* Show batch info for CRs, otherwise show selector */}
+                            {user?.role === 'cr' && user?.batch ? (
+                                <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
+                                    <p className="text-sm text-orange-700">
+                                        <strong>Booking for:</strong> Batch {user.batch}
+                                    </p>
+                                </div>
+                            ) : (
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                                        Batch *
+                                    </label>
+                                    <select
+                                        value={classtimeFormData.batch}
+                                        onChange={(e) => handleClasstimeBatchChange(e.target.value)}
+                                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    >
+                                        {batchOptions.filter(b => b !== 'All').map(batch => (
+                                            <option key={batch} value={batch}>{batch}</option>
+                                        ))}
+                                    </select>
+                                    <input
+                                        type="text"
+                                        value={classtimeFormData.batch}
+                                        onChange={(e) => handleClasstimeBatchChange(e.target.value)}
+                                        placeholder="Or type custom batch (e.g., C3S1, SW3)..."
+                                        className="w-full mt-2 px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-sm"
+                                    />
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Course *
+                                </label>
+                                {loadingCourses ? (
+                                    <div className="flex items-center gap-2 p-3 text-sm text-slate-500">
+                                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-orange-500 border-t-transparent"></div>
+                                        Loading courses...
+                                    </div>
+                                ) : availableCourses.length > 0 ? (
+                                    <select
+                                        value={classtimeFormData.course}
+                                        onChange={(e) => setClasstimeFormData({ ...classtimeFormData, course: e.target.value })}
+                                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                    >
+                                        <option value="">Select a course</option>
+                                        {availableCourses.map(course => (
+                                            <option key={course} value={course}>{course}</option>
+                                        ))}
+                                    </select>
+                                ) : null}
+                                <input
+                                    type="text"
+                                    value={classtimeFormData.course}
+                                    onChange={(e) => setClasstimeFormData({ ...classtimeFormData, course: e.target.value })}
+                                    placeholder={availableCourses.length > 0 ? "Or type course code manually..." : "e.g., CSE 4307"}
+                                    className={`w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${availableCourses.length > 0 ? 'mt-2 text-sm' : ''}`}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Syllabus (Optional)
+                                </label>
+                                <textarea
+                                    value={classtimeFormData.syllabus}
+                                    onChange={(e) => setClasstimeFormData({ ...classtimeFormData, syllabus: e.target.value })}
+                                    placeholder="e.g., Chapter 1-3, Sorting Algorithms, etc."
+                                    rows={3}
+                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-sm resize-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Teacher's Comment (Optional)
+                                </label>
+                                <textarea
+                                    value={classtimeFormData.teacherComment}
+                                    onChange={(e) => setClasstimeFormData({ ...classtimeFormData, teacherComment: e.target.value })}
+                                    placeholder="Any additional notes or instructions..."
+                                    rows={2}
+                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-sm resize-none"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="p-6 border-t border-slate-100 flex items-center justify-end gap-3">
                             <button
-                                onClick={handleSave}
+                                onClick={() => setShowClasstimeModal(false)}
+                                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleClasstimeSave}
                                 disabled={saving}
                                 className="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
                             >
@@ -554,7 +869,7 @@ const QuizBooking = () => {
                                 ) : (
                                     <>
                                         <Save size={16} />
-                                        {modalMode === 'create' ? 'Book Slot' : 'Save Changes'}
+                                        Book Slot
                                     </>
                                 )}
                             </button>

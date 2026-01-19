@@ -18,7 +18,7 @@ router.get('/config', async (req, res) => {
     try {
         const rooms = await Room.find({}).sort({ roomNumber: 1 });
         const roomNumbers = rooms.map(r => r.roomNumber);
-        
+
         res.json({
             rooms: roomNumbers,
             timeSlots: QUIZ_SLOTS
@@ -46,7 +46,7 @@ router.get('/courses-by-batch', auth, async (req, res) => {
         // Format can be "CSE 23", "SWE 22", or legacy "23", "22"
         let department = null;
         let year = null;
-        
+
         const cseSweMatch = batch.match(/^(CSE|SWE)\s+(\d+)$/i);
         if (cseSweMatch) {
             department = cseSweMatch[1].toUpperCase();
@@ -71,9 +71,9 @@ router.get('/courses-by-batch', auth, async (req, res) => {
         // Year 21: C7, C8, SW7, SW8
         const cseOffset = (24 - year) * 2 + 1;
         const sweOffset = (24 - year) * 2 + 1;
-        
+
         let batchCodes = [];
-        
+
         if (department === 'CSE') {
             // Only CSE batches (C codes)
             const cCodes = [cseOffset, cseOffset + 1];
@@ -90,7 +90,7 @@ router.get('/courses-by-batch', auth, async (req, res) => {
             // Legacy - include both CSE and SWE
             const cCodes = [cseOffset, cseOffset + 1];
             const swCodes = [sweOffset, sweOffset + 1];
-            
+
             for (const c of cCodes) {
                 batchCodes.push(`C${c}S1`, `C${c}S2`, `C${c}B1`, `C${c}B2`);
             }
@@ -105,34 +105,34 @@ router.get('/courses-by-batch', auth, async (req, res) => {
         const schedules = await Schedule.find({
             batch: { $in: batchCodes }
         }).select('course batch');
-        
+
         console.log(`Found ${schedules.length} schedules`);
-        
+
         // Extract and filter courses
         const courses = schedules
             .map(s => s.course)
             .filter(c => {
                 if (!c || typeof c !== 'string') return false;
-                
+
                 const cleaned = c.trim();
-                
+
                 // Exclude empty, very short, or invalid entries
                 if (cleaned.length < 3) return false;
-                
+
                 // Exclude patterns like "//", "bscte", etc.
                 if (/^\/+$/.test(cleaned)) return false; // Only slashes
                 if (/^bscte$/i.test(cleaned)) return false;
                 if (/^[^a-zA-Z0-9\s]+$/.test(cleaned)) return false; // Only special chars
-                
+
                 // Exclude L-pattern entries (L-1, L-2, L-3, etc.)
                 if (/^L-\d+/i.test(cleaned)) return false;
-                
+
                 return true;
             });
-        
+
         // Get unique courses
         const uniqueCourses = [...new Set(courses)];
-        
+
         console.log('Filtered unique courses:', uniqueCourses);
         res.json({ courses: uniqueCourses.sort() });
     } catch (error) {
@@ -176,7 +176,7 @@ router.get('/', authOrGuest, async (req, res) => {
 // Create a new quiz booking
 router.post('/', auth, async (req, res) => {
     try {
-        const { roomNumber, date, timeSlot, course, batch, syllabus, teacherComment } = req.body;
+        const { roomNumber, date, timeSlot, course, batch, syllabus, teacherComment, quizType } = req.body;
 
         // Get bookedBy info from authenticated user
         const bookedBy = {
@@ -225,6 +225,7 @@ router.post('/', auth, async (req, res) => {
             batch: bookingBatch,
             syllabus: syllabus || '',
             teacherComment: teacherComment || '',
+            quizType: quizType || 'manual',
             bookedBy
         });
 
@@ -245,7 +246,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // Update a quiz booking
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
     try {
         const { id } = req.params;
         const { course, batch, syllabus, teacherComment } = req.body;
@@ -253,6 +254,11 @@ router.put('/:id', async (req, res) => {
         const booking = await QuizBooking.findById(id);
         if (!booking) {
             return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        // Check ownership - only the person who booked it can update it
+        if (booking.bookedBy?.email !== req.user.email) {
+            return res.status(403).json({ error: 'You do not have permission to update this booking' });
         }
 
         if (course) booking.course = course;
@@ -274,14 +280,21 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete a quiz booking
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth, async (req, res) => {
     try {
         const { id } = req.params;
 
-        const booking = await QuizBooking.findByIdAndDelete(id);
+        const booking = await QuizBooking.findById(id);
         if (!booking) {
             return res.status(404).json({ error: 'Booking not found' });
         }
+
+        // Check ownership - only the person who booked it can delete it
+        if (booking.bookedBy?.email !== req.user.email) {
+            return res.status(403).json({ error: 'You do not have permission to delete this booking' });
+        }
+
+        await QuizBooking.findByIdAndDelete(id);
 
         res.json({
             success: true,

@@ -8,13 +8,9 @@ const API = axios.create({
 API.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem('token');
-        const guestMode = localStorage.getItem('guestMode');
 
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
-        } else if (guestMode === 'true') {
-            // Guest mode - no auth required for viewing
-            config.headers['X-Guest-Mode'] = 'true';
         }
         return config;
     },
@@ -28,14 +24,9 @@ API.interceptors.response.use(
     (response) => response,
     (error) => {
         if (error.response?.status === 401) {
-            const guestMode = localStorage.getItem('guestMode');
-
-            // Only redirect if not in guest mode
-            if (guestMode !== 'true') {
-                localStorage.removeItem('token');
-                if (window.location.pathname !== '/login') {
-                    window.location.href = '/login';
-                }
+            localStorage.removeItem('token');
+            if (window.location.pathname !== '/login') {
+                window.location.href = '/login';
             }
         }
         return Promise.reject(error);
@@ -181,11 +172,6 @@ export const getSemesterPages = async () => {
 
 export const getSemesterPageUrl = (pageNumber) => {
     const token = localStorage.getItem('token');
-    const guestMode = localStorage.getItem('guestMode');
-
-    if (guestMode === 'true') {
-        return `http://localhost:5000/api/schedule/semester-page/${pageNumber}?guestMode=true`;
-    }
     return `http://localhost:5000/api/schedule/semester-page/${pageNumber}?token=${token}`;
 };
 

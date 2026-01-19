@@ -4,6 +4,61 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 
+// @route   POST /api/auth/guest-login
+// @desc    Create/login guest user
+// @access  Public
+router.post('/guest-login', async (req, res) => {
+    try {
+        const { name, pageNumber } = req.body;
+
+        if (!name || !pageNumber) {
+            return res.status(400).json({
+                error: 'Please provide name and preferred batch'
+            });
+        }
+
+        // Generate a pseudo-random email for the guest account
+        // If we want to truly "remember" them without a token later, we'd need a more complex system,
+        // but for now, this creates a valid user record they can use with their token.
+        const guestEmail = `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}@system.local`;
+
+        const user = new User({
+            name,
+            email: guestEmail,
+            role: 'viewer',
+            isGuest: true,
+            preferredSemesterPage: pageNumber
+        });
+
+        await user.save();
+
+        // Create JWT token
+        const token = jwt.sign(
+            { userId: user._id, department: user.department },
+            process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+            { expiresIn: '30d' } // Long lived token for guests
+        );
+
+        res.status(201).json({
+            success: true,
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                isGuest: user.isGuest,
+                preferredSemesterPage: user.preferredSemesterPage
+            }
+        });
+    } catch (error) {
+        console.error('Guest login error:', error);
+        res.status(500).json({
+            error: 'Server error during guest login'
+        });
+    }
+});
+
 // @route   POST /api/auth/login
 // @desc    Login admin user
 // @access  Public
@@ -13,31 +68,31 @@ router.post('/login', async (req, res) => {
 
         // Validation
         if (!email || !password) {
-            return res.status(400).json({ 
-                error: 'Please provide email and password' 
+            return res.status(400).json({
+                error: 'Please provide email and password'
             });
         }
 
         // Find user
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(401).json({ 
-                error: 'Invalid credentials' 
+            return res.status(401).json({
+                error: 'Invalid credentials'
             });
         }
 
         // Check if user is active
         if (!user.isActive) {
-            return res.status(401).json({ 
-                error: 'Account is inactive. Please contact administrator.' 
+            return res.status(401).json({
+                error: 'Account is inactive. Please contact administrator.'
             });
         }
 
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            return res.status(401).json({ 
-                error: 'Invalid credentials' 
+            return res.status(401).json({
+                error: 'Invalid credentials'
             });
         }
 
@@ -62,8 +117,8 @@ router.post('/login', async (req, res) => {
         });
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ 
-            error: 'Server error during login' 
+        res.status(500).json({
+            error: 'Server error during login'
         });
     }
 });
@@ -77,22 +132,22 @@ router.post('/register', async (req, res) => {
 
         // Validation
         if (!name || !email || !password) {
-            return res.status(400).json({ 
-                error: 'Please provide name, email and password' 
+            return res.status(400).json({
+                error: 'Please provide name, email and password'
             });
         }
 
         if (password.length < 6) {
-            return res.status(400).json({ 
-                error: 'Password must be at least 6 characters' 
+            return res.status(400).json({
+                error: 'Password must be at least 6 characters'
             });
         }
 
         // Check if user already exists
         const existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ 
-                error: 'User with this email already exists' 
+            return res.status(400).json({
+                error: 'User with this email already exists'
             });
         }
 
@@ -129,8 +184,8 @@ router.post('/register', async (req, res) => {
         });
     } catch (error) {
         console.error('Registration error:', error);
-        res.status(500).json({ 
-            error: 'Server error during registration' 
+        res.status(500).json({
+            error: 'Server error during registration'
         });
     }
 });
@@ -155,8 +210,8 @@ router.get('/me', auth, async (req, res) => {
         });
     } catch (error) {
         console.error('Get user error:', error);
-        res.status(500).json({ 
-            error: 'Server error' 
+        res.status(500).json({
+            error: 'Server error'
         });
     }
 });
@@ -176,8 +231,8 @@ router.put('/tutorial-skip', auth, async (req, res) => {
         });
     } catch (error) {
         console.error('Tutorial skip error:', error);
-        res.status(500).json({ 
-            error: 'Server error' 
+        res.status(500).json({
+            error: 'Server error'
         });
     }
 });
@@ -197,8 +252,8 @@ router.put('/tutorial-complete', auth, async (req, res) => {
         });
     } catch (error) {
         console.error('Tutorial complete error:', error);
-        res.status(500).json({ 
-            error: 'Server error' 
+        res.status(500).json({
+            error: 'Server error'
         });
     }
 });
@@ -223,8 +278,8 @@ router.put('/tutorial-reset', auth, async (req, res) => {
         });
     } catch (error) {
         console.error('Tutorial reset error:', error);
-        res.status(500).json({ 
-            error: 'Server error' 
+        res.status(500).json({
+            error: 'Server error'
         });
     }
 });

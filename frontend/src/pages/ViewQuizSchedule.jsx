@@ -34,7 +34,7 @@ const ViewQuizSchedule = () => {
                 startDate.toISOString().split('T')[0],
                 endDate.toISOString().split('T')[0]
             );
-            
+
             setBookings(response.data.bookings || []);
         } catch (err) {
             console.error('Failed to fetch quiz bookings:', err);
@@ -52,11 +52,11 @@ const ViewQuizSchedule = () => {
                 // Handle both "CSE 24" and "24" formats
                 const bookingBatch = booking.batch.trim();
                 const selected = selectedBatch.trim();
-                
-                return bookingBatch === selected || 
-                       bookingBatch === selected.split(' ')[1] || 
-                       `CSE ${bookingBatch}` === selected ||
-                       `SWE ${bookingBatch}` === selected;
+
+                return bookingBatch === selected ||
+                    bookingBatch === selected.split(' ')[1] ||
+                    `CSE ${bookingBatch}` === selected ||
+                    `SWE ${bookingBatch}` === selected;
             }));
         }
     };
@@ -95,7 +95,7 @@ const ViewQuizSchedule = () => {
     }, {});
 
     // Sort dates
-    const sortedDates = Object.keys(groupedBookings).sort((a, b) => 
+    const sortedDates = Object.keys(groupedBookings).sort((a, b) =>
         new Date(a) - new Date(b)
     );
 
@@ -130,11 +130,10 @@ const ViewQuizSchedule = () => {
                             <button
                                 key={batch}
                                 onClick={() => setSelectedBatch(batch)}
-                                className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                                    selectedBatch === batch
-                                        ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
-                                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                                }`}
+                                className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedBatch === batch
+                                    ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                    }`}
                             >
                                 {batch}
                             </button>
@@ -158,7 +157,7 @@ const ViewQuizSchedule = () => {
                         No Quiz Schedules Found
                     </h3>
                     <p className="text-slate-500">
-                        {selectedBatch === 'All' 
+                        {selectedBatch === 'All'
                             ? 'There are no upcoming quiz exams scheduled.'
                             : `No quiz exams scheduled for ${selectedBatch}.`
                         }
@@ -181,7 +180,7 @@ const ViewQuizSchedule = () => {
                             {/* Quiz List for this date */}
                             <div className="divide-y divide-slate-200">
                                 {groupedBookings[dateKey].map((booking, index) => (
-                                    <div 
+                                    <div
                                         key={booking._id || index}
                                         onClick={() => handleBookingClick(booking)}
                                         className="p-6 hover:bg-slate-50 transition-colors cursor-pointer"
@@ -239,6 +238,13 @@ const ViewQuizSchedule = () => {
                                                 </div>
                                             </div>
                                         </div>
+
+                                        {/* Classtime Quiz Badge */}
+                                        {booking.quizType === 'classtime' && (
+                                            <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-purple-100 to-indigo-100 border border-purple-200 rounded-lg">
+                                                <span className="text-purple-700 text-xs font-semibold">🎓 Classtime Quiz</span>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
@@ -320,6 +326,11 @@ const ViewQuizSchedule = () => {
                                 <div className="flex items-center gap-3 mb-2">
                                     <BookOpen className="text-primary-600" size={24} />
                                     <p className="text-sm font-medium text-primary-900">Course</p>
+                                    {selectedBooking.quizType === 'classtime' && (
+                                        <span className="ml-auto px-2 py-1 bg-gradient-to-r from-purple-100 to-indigo-100 border border-purple-200 rounded text-xs font-semibold text-purple-700">
+                                            🎓 Classtime
+                                        </span>
+                                    )}
                                 </div>
                                 <p className="text-xl font-bold text-primary-700">
                                     {selectedBooking.course || 'Not specified'}
@@ -355,9 +366,9 @@ const ViewQuizSchedule = () => {
                                         Booked by: <span className="font-medium text-slate-700">{selectedBooking.bookedBy.name}</span>
                                         {selectedBooking.createdAt && (
                                             <span className="ml-2">
-                                                on {new Date(selectedBooking.createdAt).toLocaleDateString('en-US', { 
-                                                    year: 'numeric', 
-                                                    month: 'short', 
+                                                on {new Date(selectedBooking.createdAt).toLocaleDateString('en-US', {
+                                                    year: 'numeric',
+                                                    month: 'short',
                                                     day: 'numeric',
                                                     hour: '2-digit',
                                                     minute: '2-digit'
