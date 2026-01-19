@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import API from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { LogIn, Mail, Lock, AlertCircle, Eye, User, ChevronRight } from 'lucide-react';
 
@@ -26,8 +26,7 @@ const AdminLogin = () => {
                 // However, guests haven't logged in yet. 
                 // I might need a public endpoint for pages or allow guests to fetch pages without token.
                 // Let's assume for now we might need a public endpoint or update existing one.
-                const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-                const response = await axios.get(`${apiUrl}/schedule/semester-pages`);
+                const response = await API.get('/schedule/semester-pages');
                 if (response.data.success) {
                     setSemesterPages(response.data.pages || []);
                 }

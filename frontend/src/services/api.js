@@ -1,7 +1,10 @@
 import axios from 'axios';
 
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const prodUrl = 'https://class-routine-management.onrender.com';
+
 const API = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+    baseURL: import.meta.env.VITE_API_URL || (isLocalhost ? 'http://localhost:5000/api' : `${prodUrl}/api`),
 });
 
 // Add auth token to requests
@@ -144,7 +147,7 @@ export const getPDFInfo = async (type, department) => {
 
 export const getPDFUrl = (type) => {
     const token = localStorage.getItem('token');
-    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    const serverUrl = import.meta.env.VITE_SERVER_URL || (isLocalhost ? 'http://localhost:5000' : prodUrl);
     return `${serverUrl}/api/schedule/pdf/${type}?token=${token}`;
 };
 
@@ -157,7 +160,7 @@ export const getBatchList = async (type, department) => {
 export const getFilteredPDFUrl = (type, filter) => {
     const token = localStorage.getItem('token');
     const encodedFilter = encodeURIComponent(filter);
-    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    const serverUrl = import.meta.env.VITE_SERVER_URL || (isLocalhost ? 'http://localhost:5000' : prodUrl);
     return `${serverUrl}/api/schedule/pdf/${type}/filtered?token=${token}&filter=${encodedFilter}`;
 };
 
@@ -174,7 +177,7 @@ export const getSemesterPages = async () => {
 
 export const getSemesterPageUrl = (pageNumber) => {
     const token = localStorage.getItem('token');
-    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:5000';
+    const serverUrl = import.meta.env.VITE_SERVER_URL || (isLocalhost ? 'http://localhost:5000' : prodUrl);
     return `${serverUrl}/api/schedule/semester-page/${pageNumber}?token=${token}`;
 };
 

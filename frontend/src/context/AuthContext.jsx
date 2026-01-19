@@ -1,5 +1,5 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
-import axios from 'axios';
+import API from '../services/api';
+import { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
@@ -22,10 +22,7 @@ export const AuthProvider = ({ children }) => {
             const savedToken = localStorage.getItem('token');
             if (savedToken) {
                 try {
-                    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-                    const response = await axios.get(`${apiUrl}/auth/me`, {
-                        headers: { Authorization: `Bearer ${savedToken}` }
-                    });
+                    const response = await API.get('/auth/me');
                     setUser(response.data.user);
                     setToken(savedToken);
                 } catch (error) {
@@ -44,8 +41,7 @@ export const AuthProvider = ({ children }) => {
 
     const login = async (email, password) => {
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-            const response = await axios.post(`${apiUrl}/auth/login`, {
+            const response = await API.post('/auth/login', {
                 email,
                 password
             });
@@ -68,8 +64,7 @@ export const AuthProvider = ({ children }) => {
 
     const guestLogin = async (name, pageNumber) => {
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-            const response = await axios.post(`${apiUrl}/auth/guest-login`, {
+            const response = await API.post('/auth/guest-login', {
                 name,
                 pageNumber
             });
